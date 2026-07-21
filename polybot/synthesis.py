@@ -111,7 +111,7 @@ class SynthesisClient:
         try:
             resp = requests.get(self._wallet_path("/balance"), headers=self._headers(), timeout=self.timeout)
             resp.raise_for_status()
-            return _num(_first_present(resp.json(), ("usdc", "available", "balance", "total")))
+            return extract_usdc_balance(resp.json())
         except Exception:  # noqa: BLE001 — best-effort, non-fatal
             return None
 
@@ -153,6 +153,28 @@ def parse_order(data: Dict[str, Any]) -> OrderResult:
         fee=parse_fee(data.get("fee")),
         raw=data,
     )
+
+
+def extract_usdc_balance(data: Any) -> Optional[float]:
+    """Sum the USDC-family balance from a wallet-balance response.
+
+    Handles the nested Synthesis shape
+    ``{"response": {"balance": {"USDC.e": "1000", "USDC": "500"}}}`` (falling back
+    to ``{"balance": {...}}`` or a flat root), summing every token whose symbol
+    starts with ``USDC`` (covers native ``USDC`` and bridged ``USDC.e``, the
+    Polymarket collateral). Returns None if no balance object is present.
+    """
+    node = data.get("response", data) if isinstance(data, dict) else {}
+    balance = node.get("balance", node) if isinstance(node, dict) else {}
+    if isinstance(balance, dict):
+        usdc = [v for k, v in balance.items() if str(k).upper().startswith("USDC")]
+        if usdc:
+            return sum(_num(v) for v in usdc)
+        # Flat fallback (older/simple shapes).
+        flat = _first_present(balance, ("usdc", "available", "balance", "total"))
+        if flat is not None:
+            return _num(flat)
+    return None
 
 
 def parse_fee(fee: Any) -> float:

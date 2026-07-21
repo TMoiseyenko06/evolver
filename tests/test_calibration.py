@@ -56,6 +56,10 @@ class _FakeResp:
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
 
 def test_check_reachable_flags_404_host_error(monkeypatch):
     import polybot.synthesis as syn
@@ -74,6 +78,32 @@ def test_check_reachable_ok(monkeypatch):
     client = SynthesisClient(api_key="k", wallet_id="W")
     ok, detail = client.check_reachable()
     assert ok is True
+
+
+def test_extract_usdc_balance_nested_sums_usdc_family():
+    from polybot.synthesis import extract_usdc_balance
+
+    payload = {
+        "success": True,
+        "response": {"chain_id": "POL", "balance": {"USDC.e": "1000.000", "USDC": "500.000"}},
+    }
+    assert extract_usdc_balance(payload) == pytest.approx(1500.0)
+
+
+def test_extract_usdc_balance_flat_and_missing():
+    from polybot.synthesis import extract_usdc_balance
+
+    assert extract_usdc_balance({"balance": {"USDC": "12.5"}}) == pytest.approx(12.5)
+    assert extract_usdc_balance({"nope": 1}) is None
+
+
+def test_get_balance_parses_nested_response(monkeypatch):
+    import polybot.synthesis as syn
+
+    payload = {"success": True, "response": {"balance": {"USDC.e": "1000", "USDC": "500"}}}
+    monkeypatch.setattr(syn.requests, "get", lambda *a, **k: _FakeResp(200, payload=payload))
+    client = SynthesisClient(api_key="k", wallet_id="W")
+    assert client.get_balance() == pytest.approx(1500.0)
 
 
 # --- Fake Synthesis client + executor ------------------------------------- #
