@@ -1,0 +1,15 @@
+# evolver runtime artifacts
+evolver.sqlite
+evolver.sqlite-*
+/runs/
+/strategies/
+/data/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.env
