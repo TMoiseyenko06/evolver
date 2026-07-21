@@ -161,6 +161,12 @@ def cmd_calibrate(config: Config, args) -> int:
         return 1
 
     real_executor = build_synthesis_executor(config)
+    # Fail fast if the API host/path/creds are wrong, before waiting for a window.
+    ok, detail = real_executor.client.check_reachable()
+    if not ok:
+        print(f"ERROR: Synthesis endpoint preflight failed: {detail}", file=sys.stderr)
+        store.close()
+        return 2
     balance = real_executor.client.get_balance()
     bal_str = f"${balance:.2f}" if balance is not None else "unknown"
     print(f"Driver: {driver.name}  ·  wallet {config.synthesis_wallet_id}  ·  balance {bal_str}")

@@ -42,6 +42,40 @@ def test_client_refuses_without_credentials():
         client.place_market_order("123", "BUY", 1.0)
 
 
+def test_wallet_path_uses_the_api_host_not_docs_host():
+    client = SynthesisClient(api_key="k", wallet_id="W", base_url="https://synthesis.trade")
+    assert client._wallet_path("/order") == "https://synthesis.trade/api/v1/wallet/pol/W/order"
+
+
+class _FakeResp:
+    def __init__(self, status_code, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def test_check_reachable_flags_404_host_error(monkeypatch):
+    import polybot.synthesis as syn
+
+    monkeypatch.setattr(syn.requests, "get", lambda *a, **k: _FakeResp(404, text="NOT_FOUND"))
+    client = SynthesisClient(api_key="k", wallet_id="W")
+    ok, detail = client.check_reachable()
+    assert ok is False
+    assert "SYNTHESIS_BASE_URL" in detail
+
+
+def test_check_reachable_ok(monkeypatch):
+    import polybot.synthesis as syn
+
+    monkeypatch.setattr(syn.requests, "get", lambda *a, **k: _FakeResp(200, payload={"usdc": "5"}))
+    client = SynthesisClient(api_key="k", wallet_id="W")
+    ok, detail = client.check_reachable()
+    assert ok is True
+
+
 # --- Fake Synthesis client + executor ------------------------------------- #
 class FakeSynthesisClient:
     def __init__(self, price=0.56, fee=0.01, status="MATCHED", fail=False):

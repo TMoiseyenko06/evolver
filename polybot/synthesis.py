@@ -52,7 +52,7 @@ class OrderResult:
 class SynthesisClient:
     api_key: str
     wallet_id: str
-    base_url: str = "https://api.synthesis.trade"
+    base_url: str = "https://synthesis.trade"
     timeout: float = 30.0
 
     def _headers(self) -> Dict[str, str]:
@@ -90,6 +90,11 @@ class SynthesisClient:
             )
         except requests.RequestException as exc:
             raise SynthesisError(f"order request failed: {exc}") from exc
+        if resp.status_code == 404:
+            raise SynthesisError(
+                f"order rejected 404 from {self._wallet_path('/order')} — check "
+                f"SYNTHESIS_BASE_URL (should be https://synthesis.trade): {resp.text[:200]}"
+            )
         if resp.status_code >= 400:
             raise SynthesisError(f"order rejected {resp.status_code}: {resp.text[:400]}")
         return parse_order(resp.json())
@@ -102,13 +107,35 @@ class SynthesisClient:
         return resp.json()
 
     def get_balance(self) -> Optional[float]:
-        """Best-effort USDC balance for a preflight check; None if unreadable."""
+        """Best-effort USDC balance for display; None if unreadable."""
         try:
             resp = requests.get(self._wallet_path("/balance"), headers=self._headers(), timeout=self.timeout)
             resp.raise_for_status()
             return _num(_first_present(resp.json(), ("usdc", "available", "balance", "total")))
-        except Exception:  # noqa: BLE001 — preflight only, non-fatal
+        except Exception:  # noqa: BLE001 — best-effort, non-fatal
             return None
+
+    def check_reachable(self):
+        """Preflight the wallet endpoint so a wrong host/path fails fast.
+
+        Returns ``(ok, detail)``. ``ok`` is False on 404/401/403 or a connection
+        error — i.e. before we bother waiting for a live trading window.
+        """
+        url = self._wallet_path("/balance")
+        if not self.api_key or not self.wallet_id:
+            return False, "SYNTHESIS_API_KEY / SYNTHESIS_WALLET_ID not set"
+        try:
+            resp = requests.get(url, headers=self._headers(), timeout=self.timeout)
+        except requests.RequestException as exc:
+            return False, f"could not reach {url}: {exc}"
+        if resp.status_code == 404:
+            return False, (f"404 from {url} — check SYNTHESIS_BASE_URL "
+                           f"(should be https://synthesis.trade, not the docs host)")
+        if resp.status_code in (401, 403):
+            return False, f"{resp.status_code} from {url} — check SYNTHESIS_API_KEY / wallet id"
+        if resp.status_code >= 400:
+            return False, f"{resp.status_code} from {url}: {resp.text[:200]}"
+        return True, "ok"
 
 
 def parse_order(data: Dict[str, Any]) -> OrderResult:
