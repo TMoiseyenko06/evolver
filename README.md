@@ -11,7 +11,7 @@ is forward-tested on live markets with paper money, ranked, and bred forever.
   vendored here.
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...
+cp .env.example .env           # then set OPENROUTER_API_KEY (auto-loaded by the CLI)
 python -m evolver run          # the eternal loop
 python -m evolver leaderboard  # lifetime rankings, generations survived
 python -m evolver show NAME     # a strategy's code, lineage, full stat history

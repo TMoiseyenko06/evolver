@@ -16,6 +16,7 @@ import shutil
 import sys
 
 from .config import Config
+from .env import find_dotenv, load_dotenv
 from .market import LiveMarket
 from .openrouter import OpenRouterClient
 from .reporting import format_leaderboard
@@ -34,7 +35,11 @@ def _setup_logging() -> None:
 
 def cmd_run(config: Config, args) -> int:
     if not config.openrouter_api_key:
-        print("ERROR: OPENROUTER_API_KEY is not set in the environment.", file=sys.stderr)
+        print(
+            "ERROR: OPENROUTER_API_KEY is not set. Put it in a .env file "
+            "(see .env.example) or export it in your environment.",
+            file=sys.stderr,
+        )
         return 2
     store = Store(config)
     market = LiveMarket(config)
@@ -166,6 +171,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     _setup_logging()
+    # Load a .env file (if present) before Config reads the environment.
+    dotenv_path = find_dotenv()
+    loaded = load_dotenv()
+    if loaded:
+        logging.getLogger("evolver").info(
+            "loaded %d var(s) from %s", len(loaded), dotenv_path
+        )
     parser = build_parser()
     args = parser.parse_args(argv)
     config = Config()

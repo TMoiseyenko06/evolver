@@ -181,11 +181,20 @@ positions are held to resolution.
 
 ## Configuration
 
+The CLI auto-loads a **`.env`** file (discovered by walking up from the current
+directory) before reading configuration — copy `.env.example` to `.env` and fill
+it in. Real environment variables take precedence over `.env` values.
+
 | env var | meaning |
 |---|---|
 | `OPENROUTER_API_KEY` | required for `run` |
 | `EVOLVER_MODEL` | OpenRouter model slug (default `anthropic/claude-sonnet-4`) |
 | `EVOLVER_DATA_DIR` | where `evolver.sqlite`, `runs/`, `strategies/` live (default `.`) |
+
+```bash
+cp .env.example .env      # then edit OPENROUTER_API_KEY
+python -m evolver run
+```
 
 All numeric knobs (population size, windows/generation, stake, bankroll, timeout,
 thresholds) live in `evolver/config.py`.
