@@ -157,6 +157,42 @@ def test_replay_is_deterministic(tmp_path):
     assert again.stats.net_pnl == pytest.approx(result.stats.net_pnl)
 
 
+def test_live_window_status_board_is_printed(tmp_path, capsys):
+    cfg = make_config(tmp_path, population_size=3, survivors=1, windows_per_generation=4)
+    store = Store(cfg)
+    from evolver.generation import run_generation
+    from evolver.strategy import LoadedStrategy
+
+    pop = [
+        LoadedStrategy.create(strategy_source("momentum", BODY_MOMENTUM), 1, cfg),
+        LoadedStrategy.create(strategy_source("always_down", BODY_ALWAYS_DOWN), 1, cfg),
+        LoadedStrategy.create(strategy_source("passer", BODY_PASS), 1, cfg),
+    ]
+    run_generation(pop, MockMarket(default_window_specs()), store, cfg, 1)
+    out = capsys.readouterr().out
+
+    # One board per resolved window, each showing the resolution and every strategy.
+    assert out.count("window 1/4") == 1
+    assert "window 4/4" in out
+    assert "resolved Up" in out and "resolved Down" in out
+    assert "bankroll" in out and "life P&L" in out
+    for name in ("momentum", "always_down", "passer"):
+        assert name in out
+    assert "WIN" in out and "LOSS" in out and "pass" in out
+
+
+def test_live_reports_can_be_disabled(tmp_path, capsys):
+    cfg = make_config(tmp_path, population_size=2, survivors=1, windows_per_generation=2)
+    cfg.live_window_reports = False
+    store = Store(cfg)
+    from evolver.generation import run_generation
+    from evolver.strategy import LoadedStrategy
+
+    pop = [LoadedStrategy.create(strategy_source("p", BODY_PASS), 1, cfg)]
+    run_generation(pop, MockMarket(default_window_specs()), store, cfg, 1)
+    assert "bankroll" not in capsys.readouterr().out
+
+
 def test_window_log_has_book_snapshots_and_hash(tmp_path):
     cfg, store, client = _run_two_generations(tmp_path)
     row = store.conn.execute("SELECT data_json, candle_state_hash FROM windows LIMIT 1").fetchone()

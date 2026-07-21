@@ -71,6 +71,28 @@ positions are held to resolution.
 
 ---
 
+## Watching it run
+
+After **every resolved 5-minute window**, `run` prints a live status board so you
+can watch the population evolve window by window — what each strategy did, its
+running bankroll (each starts at **$500**, risking a fixed **$10** per trade), and
+its lifetime record:
+
+```
+gen 1 · window 3/50 · win_down_1 · resolved Down
+  strategy             this window               bankroll  life P&L trades  hit% gens
+  momentum             Down@0.47 WIN   +10.96      526.82    +26.82      3 100.0    0
+  always_up            Up@0.55 LOSS  -10.26        505.60     +5.60      3  66.7    0
+  passer               pass                        500.00     +0.00      0   0.0    0
+  crasher              retired                     500.00     +0.00      0   0.0    0
+  always_down          Down@0.47 WIN   +10.96      490.34     -9.66      3  33.3    0
+```
+
+Set `Config.live_window_reports = False` to silence it. The end-of-generation
+markdown report in `runs/gen{G}_report.md` is still written regardless.
+
+---
+
 ## Module map
 
 | file | responsibility |

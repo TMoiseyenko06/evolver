@@ -33,6 +33,7 @@ from .models import Decision, Fill, PollSnapshot, TradeResult, WindowData
 from .openrouter import extract_code_blocks, parse_lineage
 from .prompts import SYSTEM_PROMPT, evolution_prompt, repair_prompt, seed_prompt
 from .replay import action_vector, agreement
+from .reporting import format_window_status
 from .sandbox import SandboxError
 from .strategy import LoadedStrategy
 from .store import Store
@@ -173,6 +174,11 @@ def run_generation(
                 handle.window_id, resolution.coinbase_side, resolution.official_side,
             )
         resolved_count += 1
+        if config.live_window_reports:
+            print(format_window_status(
+                generation, resolved_count, config.windows_per_generation,
+                handle.window_id, resolved, mismatch, strategies, trades,
+            ), flush=True)
 
 
 # --------------------------------------------------------------------------- #

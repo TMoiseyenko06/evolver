@@ -66,6 +66,52 @@ def write_generation_report(
     return str(path)
 
 
+def format_window_status(
+    generation: int,
+    window_num: int,
+    total_windows: int,
+    window_id: str,
+    resolved_side: str,
+    mismatch: bool,
+    population: List[LoadedStrategy],
+    trades: List,
+) -> str:
+    """A per-strategy board printed live after each resolved 5-minute window.
+
+    Shows what each strategy did this window (traded which side at what price and
+    whether it won/lost, or passed/retired) alongside its running bankroll and
+    lifetime record — so you can watch the population evolve window by window.
+    """
+    trades_by = {t.strategy_name: t for t in trades}
+    tag = "  [coinbase/official MISMATCH]" if mismatch else ""
+    width = 78
+    lines: List[str] = []
+    lines.append("─" * width)
+    lines.append(
+        f"gen {generation} · window {window_num}/{total_windows} · {window_id} "
+        f"· resolved {resolved_side}{tag}"
+    )
+    lines.append(
+        f"  {'strategy':<20} {'this window':<24} {'bankroll':>9} "
+        f"{'life P&L':>9} {'trades':>6} {'hit%':>5} {'gens':>4}"
+    )
+    for s in sorted(population, key=lambda st: st.bankroll, reverse=True):
+        t = trades_by.get(s.name)
+        if t is not None:
+            outcome = "WIN " if t.won else "LOSS"
+            this = f"{t.fill.side}@{t.fill.avg_price:.2f} {outcome} {t.net_pnl:+7.2f}"
+        elif s.retired:
+            this = "retired"
+        else:
+            this = "pass"
+        lt = s.lifetime
+        lines.append(
+            f"  {s.name:<20} {this:<24} {s.bankroll:>9.2f} "
+            f"{lt.net_pnl:>+9.2f} {lt.trades:>6} {lt.hit_pct*100:>5.1f} {s.generations_survived:>4}"
+        )
+    return "\n".join(lines)
+
+
 def format_leaderboard(rows: List[dict]) -> str:
     """Format lifetime leaderboard rows (from Store.leaderboard_rows) as text."""
     if not rows:

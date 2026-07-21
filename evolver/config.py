@@ -32,6 +32,8 @@ class Config:
     # --- live polling ---
     poll_interval_seconds: int = 10
     window_seconds: int = 300
+    # Print a per-strategy status board after every resolved 5-minute window.
+    live_window_reports: bool = True
 
     # --- sandbox / safety ---
     decide_timeout_seconds: float = 1.0
