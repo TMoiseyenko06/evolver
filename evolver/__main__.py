@@ -170,6 +170,8 @@ def cmd_calibrate(config: Config, args) -> int:
     balance = real_executor.client.get_balance()
     bal_str = f"${balance:.2f}" if balance is not None else "unknown"
     print(f"Driver: {driver.name}  ·  wallet {config.synthesis_wallet_id}  ·  balance {bal_str}")
+    if balance is None:
+        print(f"  (balance raw: {real_executor.client.balance_raw()})")
     print(f"Placing up to {trades} real orders of ${stake:.2f} on live markets. Ctrl-C to abort.\n")
 
     market = LiveMarket(config)

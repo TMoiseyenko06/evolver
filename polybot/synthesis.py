@@ -115,6 +115,14 @@ class SynthesisClient:
         except Exception:  # noqa: BLE001 — best-effort, non-fatal
             return None
 
+    def balance_raw(self) -> str:
+        """Raw balance body (truncated) for diagnosing a parse miss."""
+        try:
+            resp = requests.get(self._wallet_path("/balance"), headers=self._headers(), timeout=self.timeout)
+            return f"HTTP {resp.status_code}: {resp.text[:400]}"
+        except Exception as exc:  # noqa: BLE001
+            return f"error: {exc}"
+
     def check_reachable(self):
         """Preflight the wallet endpoint so a wrong host/path fails fast.
 
@@ -138,43 +146,97 @@ class SynthesisClient:
         return True, "ok"
 
 
+def _unwrap(data: Any) -> Any:
+    """Peel a ``{"success":..,"response":{..}}`` (or data/result) envelope."""
+    seen = 0
+    while isinstance(data, dict) and seen < 5:
+        for key in ("response", "data", "result"):
+            inner = data.get(key)
+            if isinstance(inner, (dict, list)):
+                data = inner
+                break
+        else:
+            break
+        seen += 1
+    return data
+
+
+def _pick(data: Dict[str, Any], keys, default=None):
+    for k in keys:
+        if isinstance(data, dict) and data.get(k) is not None:
+            return data[k]
+    return default
+
+
 def parse_order(data: Dict[str, Any]) -> OrderResult:
-    """Map a create-order response into an :class:`OrderResult` (tolerant of shape)."""
+    """Map a create-order response into an :class:`OrderResult`.
+
+    Tolerant of Synthesis's response envelope and field-name variants; the full
+    original response is preserved in ``raw`` for auditing.
+    """
+    body = _unwrap(data)
+    body = body if isinstance(body, dict) else {}
     return OrderResult(
-        order_id=str(data.get("order_id") or data.get("id") or ""),
-        token_id=str(data.get("token_id") or ""),
-        side=str(data.get("side") or ""),
-        type=str(data.get("type") or ""),
-        status=str(data.get("status") or ""),
-        amount_usdc=_num(data.get("amount")),
-        filled=_num(data.get("filled") if data.get("filled") is not None else data.get("amount")),
-        shares=_num(data.get("shares")),
-        price=_num(data.get("price")),
-        fee=parse_fee(data.get("fee")),
+        order_id=str(_pick(body, ("order_id", "id", "orderID", "orderId"), "")),
+        token_id=str(_pick(body, ("token_id", "tokenId"), "")),
+        side=str(_pick(body, ("side",), "")),
+        type=str(_pick(body, ("type", "order_type"), "")),
+        status=str(_pick(body, ("status", "state"), "")),
+        amount_usdc=_num(_pick(body, ("amount", "amount_usdc", "usdc"))),
+        filled=_num(_pick(body, ("filled", "filled_amount", "matched_amount", "amount"))),
+        shares=_num(_pick(body, ("shares", "size", "filled_size", "matched_size", "quantity"))),
+        price=_num(_pick(body, ("price", "avg_price", "average_price", "fill_price"))),
+        fee=parse_fee(_pick(body, ("fee", "fees"))),
         raw=data,
     )
 
 
 def extract_usdc_balance(data: Any) -> Optional[float]:
-    """Sum the USDC-family balance from a wallet-balance response.
+    """Sum the USDC-family balance from a wallet-balance response, shape-agnostic.
 
-    Handles the nested Synthesis shape
-    ``{"response": {"balance": {"USDC.e": "1000", "USDC": "500"}}}`` (falling back
-    to ``{"balance": {...}}`` or a flat root), summing every token whose symbol
-    starts with ``USDC`` (covers native ``USDC`` and bridged ``USDC.e``, the
-    Polymarket collateral). Returns None if no balance object is present.
+    Recursively finds USDC amounts under the (unwrapped) body: a symbol->amount
+    map (``{"USDC":"..","USDC.e":".."}``), a list of asset objects
+    (``[{"symbol":"USDC","amount":".."}]``), or flat keys. Returns None when no
+    USDC-like amount is found anywhere.
     """
-    node = data.get("response", data) if isinstance(data, dict) else {}
-    balance = node.get("balance", node) if isinstance(node, dict) else {}
-    if isinstance(balance, dict):
-        usdc = [v for k, v in balance.items() if str(k).upper().startswith("USDC")]
-        if usdc:
-            return sum(_num(v) for v in usdc)
-        # Flat fallback (older/simple shapes).
-        flat = _first_present(balance, ("usdc", "available", "balance", "total"))
-        if flat is not None:
-            return _num(flat)
-    return None
+    total, found = _sum_usdc(_unwrap(data))
+    return total if found else None
+
+
+_SYMBOL_KEYS = ("symbol", "token", "currency", "asset", "ticker")
+_AMOUNT_KEYS = ("amount", "balance", "available", "value", "size", "quantity")
+
+
+def _sum_usdc(node: Any, _depth: int = 0):
+    """Return (sum, found) of USDC amounts anywhere within ``node``."""
+    if _depth > 6:
+        return 0.0, False
+    total, found = 0.0, False
+    if isinstance(node, dict):
+        # symbol->amount map: key names the token.
+        for k, v in node.items():
+            if str(k).upper().startswith("USDC") and _is_num(v):
+                total += _num(v)
+                found = True
+        # asset object: {symbol: USDC..., amount: ...}
+        sym = _pick(node, _SYMBOL_KEYS)
+        if sym is not None and str(sym).upper().startswith("USDC"):
+            amt = _pick(node, _AMOUNT_KEYS)
+            if _is_num(amt):
+                total += _num(amt)
+                found = True
+        # recurse into nested containers.
+        for v in node.values():
+            if isinstance(v, (dict, list)):
+                sub, sub_found = _sum_usdc(v, _depth + 1)
+                total += sub
+                found = found or sub_found
+    elif isinstance(node, list):
+        for item in node:
+            sub, sub_found = _sum_usdc(item, _depth + 1)
+            total += sub
+            found = found or sub_found
+    return total, found
 
 
 def parse_fee(fee: Any) -> float:

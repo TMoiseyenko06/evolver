@@ -36,6 +36,28 @@ def test_parse_order_maps_fields():
     assert o.fee == pytest.approx(0.02)
 
 
+def test_parse_order_unwraps_response_envelope():
+    # Synthesis wraps bodies as {"success":true,"response":{...}} — must unwrap,
+    # else shares parse to 0 and a real fill is misread as "did not fill".
+    o = parse_order({
+        "success": True,
+        "response": {
+            "order_id": "xyz", "side": "BUY", "type": "MARKET", "status": "MATCHED",
+            "amount": "1", "filled": "1", "shares": "2.5", "price": "0.40",
+            "fee": {"amount": "0.01"},
+        },
+    })
+    assert o.order_id == "xyz" and o.matched
+    assert o.shares == pytest.approx(2.5) and o.price == pytest.approx(0.40)
+
+
+def test_parse_order_tolerates_alt_field_names():
+    o = parse_order({"response": {"id": "q", "state": "MATCHED",
+                                  "size": "3", "avg_price": "0.33"}})
+    assert o.order_id == "q" and o.shares == pytest.approx(3.0)
+    assert o.price == pytest.approx(0.33)
+
+
 def test_client_refuses_without_credentials():
     client = SynthesisClient(api_key="", wallet_id="")
     with pytest.raises(SynthesisError):
@@ -95,6 +117,24 @@ def test_extract_usdc_balance_flat_and_missing():
 
     assert extract_usdc_balance({"balance": {"USDC": "12.5"}}) == pytest.approx(12.5)
     assert extract_usdc_balance({"nope": 1}) is None
+
+
+def test_extract_usdc_balance_list_of_assets():
+    from polybot.synthesis import extract_usdc_balance
+
+    payload = {"response": {"assets": [
+        {"symbol": "USDC", "amount": "10"},
+        {"symbol": "USDC.e", "amount": "5"},
+        {"symbol": "WETH", "amount": "2"},
+    ]}}
+    assert extract_usdc_balance(payload) == pytest.approx(15.0)
+
+
+def test_extract_usdc_balance_deeply_nested():
+    from polybot.synthesis import extract_usdc_balance
+
+    payload = {"success": True, "response": {"wallet": {"balances": {"USDC.e": "7.25"}}}}
+    assert extract_usdc_balance(payload) == pytest.approx(7.25)
 
 
 def test_get_balance_parses_nested_response(monkeypatch):

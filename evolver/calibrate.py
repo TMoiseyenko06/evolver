@@ -103,7 +103,20 @@ def run_calibration(
                     raise
                 break
             if real_fill is None:
-                log.warning("%s: real order did not fill; skipping window", handle.window_id)
+                order = getattr(real_executor, "last_order", None)
+                status = getattr(order, "status", "") or ""
+                raw = json.dumps(getattr(order, "raw", {}))[:600]
+                if status and status.upper() not in ("REJECTED", "CANCELED", "CANCELLED", "FAILED"):
+                    # Non-empty status but 0 parsed shares => likely a PARSE issue,
+                    # and the order may actually have executed. Surface it loudly.
+                    log.error(
+                        "%s: order returned status=%s but 0 parsed shares — POSSIBLE FILL "
+                        "we failed to parse. Check Synthesis order history. raw=%s",
+                        handle.window_id, status, raw,
+                    )
+                else:
+                    log.warning("%s: real order did not fill (status=%s). raw=%s",
+                                handle.window_id, status or "?", raw)
                 break
             consecutive_failures = 0
             order = getattr(real_executor, "last_order", None)
