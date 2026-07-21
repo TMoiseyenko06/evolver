@@ -70,8 +70,8 @@ class LiveMarket:
         self._spot_stream: streaming.SpotStream = None
 
     def _ensure_streams(self) -> None:
-        """Lazily start the WebSocket feeds (once) when enabled."""
-        if not self.config.use_websocket:
+        """Lazily start the WebSocket feeds (once) when enabled and available."""
+        if not self.config.use_websocket or not streaming.WEBSOCKET_AVAILABLE:
             return
         if self._book_stream is None:
             self._book_stream = streaming.OrderBookStream(self.config.pm_ws_url)

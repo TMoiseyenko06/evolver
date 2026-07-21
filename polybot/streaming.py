@@ -26,7 +26,17 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import websocket  # websocket-client
+try:
+    import websocket  # from the `websocket-client` package
+    # Guard against the unrelated `websocket` (0.2.1) package, which lacks this.
+    if not hasattr(websocket, "WebSocketApp"):
+        websocket = None
+except ImportError:  # pragma: no cover
+    websocket = None
+
+# True only when the real `websocket-client` package is importable. When False,
+# the streams disable themselves and callers transparently fall back to REST.
+WEBSOCKET_AVAILABLE = websocket is not None
 
 log = logging.getLogger("polybot.streaming")
 
@@ -136,6 +146,13 @@ class _WSClient:
 
     # --- lifecycle --- #
     def start(self) -> None:
+        if not WEBSOCKET_AVAILABLE:
+            log.warning(
+                "%s stream disabled: `websocket-client` is not installed "
+                "(falling back to REST). Install it with: pip install websocket-client",
+                self.name,
+            )
+            return
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()

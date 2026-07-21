@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+import polybot.streaming as streaming
 from polybot.streaming import (
     BookState,
     OrderBookStream,
@@ -127,6 +128,24 @@ def test_spot_freshness_respects_max_age():
     s.on_message({"type": "ticker", "price": "50000"})
     s._price_ts = time.time() - 60
     assert s.get_spot(max_age=5) is None
+
+
+# --- graceful degradation when websocket-client is missing ---------------- #
+def test_stream_start_is_noop_when_websocket_unavailable(monkeypatch):
+    monkeypatch.setattr(streaming, "WEBSOCKET_AVAILABLE", False)
+    s = OrderBookStream()
+    s.start()  # must not raise or spawn a thread
+    assert s._thread is None
+
+
+def test_live_market_skips_streams_when_unavailable(monkeypatch, tmp_path):
+    from evolver.config import Config
+    from evolver.market import LiveMarket
+
+    monkeypatch.setattr(streaming, "WEBSOCKET_AVAILABLE", False)
+    m = LiveMarket(Config(use_websocket=True))
+    m._ensure_streams()
+    assert m._book_stream is None and m._spot_stream is None  # -> REST fallback path
 
 
 # --- proxy parsing -------------------------------------------------------- #

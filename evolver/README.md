@@ -173,6 +173,11 @@ The WS layer lives in `polybot/streaming.py` (socket I/O kept thin; all book
 parsing/mutation is pure, unit-tested functions). Total WS failure is non-fatal —
 the run simply degrades to REST. Set `Config.use_websocket = False` to force REST.
 
+Requires the **`websocket-client`** package (`pip install websocket-client` — note
+the hyphen; the unrelated `websocket` package is *not* it). If it isn't installed
+the streams disable themselves and everything falls back to REST automatically, so
+it's effectively optional — installing it just cuts latency.
+
 Polls fire at a **constant, drift-free cadence** (anchored to `open + k·poll_interval`
 on a monotonic clock), with one guaranteed final poll `final_poll_lead_seconds`
 before close so late-window strategies still act in the closing seconds.
