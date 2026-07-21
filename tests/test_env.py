@@ -19,14 +19,14 @@ def test_loads_keys_and_strips_quotes_and_comments(tmp_path, monkeypatch):
             "# a comment",
             "",
             "OPENROUTER_API_KEY=sk-or-secret",
-            'EVOLVER_MODEL="anthropic/claude-sonnet-4"',
+            'EVOLVER_MODEL="anthropic/claude-opus-4.8"',
             "export EVOLVER_DATA_DIR='/tmp/data'",
         ]),
     )
     loaded = load_dotenv(env)
     assert loaded["OPENROUTER_API_KEY"] == "sk-or-secret"
     assert os.environ["OPENROUTER_API_KEY"] == "sk-or-secret"
-    assert os.environ["EVOLVER_MODEL"] == "anthropic/claude-sonnet-4"  # quotes stripped
+    assert os.environ["EVOLVER_MODEL"] == "anthropic/claude-opus-4.8"  # quotes stripped
     assert os.environ["EVOLVER_DATA_DIR"] == "/tmp/data"  # export + quotes handled
 
 

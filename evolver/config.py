@@ -20,7 +20,7 @@ class Config:
     openrouter_api_key: str = field(default_factory=lambda: os.environ.get("OPENROUTER_API_KEY", ""))
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Default to an Anthropic Claude model slug; override via env or config.
-    model: str = field(default_factory=lambda: os.environ.get("EVOLVER_MODEL", "anthropic/claude-sonnet-4"))
+    model: str = field(default_factory=lambda: os.environ.get("EVOLVER_MODEL", "anthropic/claude-opus-4.8"))
 
     # --- evolution parameters ---
     population_size: int = 10

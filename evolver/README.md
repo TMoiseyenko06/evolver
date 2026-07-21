@@ -40,7 +40,7 @@ offline against a mock market in tests.
 ## How it works
 
 1. **Generate.** `OpenRouterClient` (key from `OPENROUTER_API_KEY`, model
-   configurable, default `anthropic/claude-sonnet-4`) is prompted to emit
+   configurable, default `anthropic/claude-opus-4.8`) is prompted to emit
    `population_size` (=10) strategies as Python `class Strategy` blocks.
 2. **Forward-test.** All strategies run simultaneously over one **generation = 50
    resolved windows**. Every strategy sees the *same* data each poll: one shared
@@ -174,7 +174,7 @@ positions are held to resolution.
   so the population returns to size.
 - **Resume**: `run` reloads the alive population from SQLite and continues at the
   next unfinished generation; an interrupted run loses nothing already persisted.
-- **Default model** is `anthropic/claude-sonnet-4`; override with `EVOLVER_MODEL`
+- **Default model** is `anthropic/claude-opus-4.8`; override with `EVOLVER_MODEL`
   or `Config.model`.
 
 ---
@@ -188,7 +188,7 @@ it in. Real environment variables take precedence over `.env` values.
 | env var | meaning |
 |---|---|
 | `OPENROUTER_API_KEY` | required for `run` |
-| `EVOLVER_MODEL` | OpenRouter model slug (default `anthropic/claude-sonnet-4`) |
+| `EVOLVER_MODEL` | OpenRouter model slug (default `anthropic/claude-opus-4.8`) |
 | `EVOLVER_DATA_DIR` | where `evolver.sqlite`, `runs/`, `strategies/` live (default `.`) |
 
 ```bash
