@@ -125,6 +125,31 @@ CREATE TABLE IF NOT EXISTS gen_stats (
     rank INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS calibration (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seq INTEGER,
+    window_id TEXT,
+    driver TEXT,
+    side TEXT,
+    resolved_side TEXT,
+    paper_price REAL,
+    paper_shares REAL,
+    paper_fee REAL,
+    paper_cost REAL,
+    paper_net_pnl REAL,
+    paper_won INTEGER,
+    real_price REAL,
+    real_shares REAL,
+    real_fee REAL,
+    real_cost REAL,
+    real_net_pnl REAL,
+    real_won INTEGER,
+    order_id TEXT,
+    order_status TEXT,
+    raw_json TEXT,
+    created_at REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_windows_gen ON windows(generation, seq);
 CREATE INDEX IF NOT EXISTS idx_decisions_win ON decisions(window_row_id);
 CREATE INDEX IF NOT EXISTS idx_trades_strat ON trades(strategy_name);
@@ -392,3 +417,26 @@ class Store:
     def all_strategy_sources(self) -> Dict[str, str]:
         rows = self.conn.execute("SELECT name, source FROM strategies").fetchall()
         return {r["name"]: r["source"] for r in rows}
+
+    # --- calibration (paper-vs-real experiment) --------------------------- #
+    def save_calibration(self, rec: dict) -> None:
+        self.conn.execute(
+            "INSERT INTO calibration (seq, window_id, driver, side, resolved_side,"
+            " paper_price, paper_shares, paper_fee, paper_cost, paper_net_pnl, paper_won,"
+            " real_price, real_shares, real_fee, real_cost, real_net_pnl, real_won,"
+            " order_id, order_status, raw_json, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rec["seq"], rec["window_id"], rec["driver"], rec["side"], rec["resolved_side"],
+                rec["paper_price"], rec["paper_shares"], rec["paper_fee"], rec["paper_cost"],
+                rec["paper_net_pnl"], 1 if rec["paper_won"] else 0,
+                rec["real_price"], rec["real_shares"], rec["real_fee"], rec["real_cost"],
+                rec["real_net_pnl"], 1 if rec["real_won"] else 0,
+                rec.get("order_id"), rec.get("order_status"), rec.get("raw_json"), time.time(),
+            ),
+        )
+        self.conn.commit()
+
+    def calibration_rows(self) -> List[dict]:
+        rows = self.conn.execute("SELECT * FROM calibration ORDER BY id").fetchall()
+        return [dict(r) for r in rows]

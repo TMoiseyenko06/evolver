@@ -59,6 +59,17 @@ class Config:
     # --- market ---
     product: str = "BTC-USD"
 
+    # --- live order execution (Synthesis) — used only by `calibrate` ---
+    synthesis_api_key: str = field(default_factory=lambda: os.environ.get("SYNTHESIS_API_KEY", ""))
+    synthesis_wallet_id: str = field(default_factory=lambda: os.environ.get("SYNTHESIS_WALLET_ID", ""))
+    synthesis_base_url: str = field(
+        default_factory=lambda: os.environ.get("SYNTHESIS_BASE_URL", "https://api.synthesis.trade")
+    )
+    live_stake: float = 1.0        # real USDC per calibration order
+    max_live_stake: float = 5.0    # hard safety cap; refuse to place above this
+    calibration_trades: int = 12   # default number of real trades to collect
+    order_slippage_cap: float = 0.98  # max price to pay on a MARKET buy (0<p<=1)
+
     # --- paths ---
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("EVOLVER_DATA_DIR", ".")))
 

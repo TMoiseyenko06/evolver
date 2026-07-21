@@ -10,6 +10,7 @@ python -m evolver run          # the eternal loop
 python -m evolver leaderboard  # lifetime rankings, generations survived
 python -m evolver show NAME     # a strategy's code, lineage, full stat history
 python -m evolver replay NAME   # re-score a strategy against archived windows
+python -m evolver calibrate --yes  # place real $-stake orders vs paper (Synthesis)
 python -m evolver reset --yes   # wipe db + runs/ + strategies/
 ```
 
@@ -175,6 +176,42 @@ the run simply degrades to REST. Set `Config.use_websocket = False` to force RES
 Polls fire at a **constant, drift-free cadence** (anchored to `open + k·poll_interval`
 on a monotonic clock), with one guaranteed final poll `final_poll_lead_seconds`
 before close so late-window strategies still act in the closing seconds.
+
+---
+
+## Calibration: how accurate is the paper trade? (`calibrate`)
+
+`calibrate` measures the paper simulation against reality using **real money at a
+tiny stake**. It runs a driver strategy on the live market and, each time the
+strategy enters, it BOTH simulates the fill (paper) *and* places a real MARKET
+order via **[Synthesis](https://api.synthesis.trade/docs)** — against the same
+book at the same instant. After each window resolves, both are scored identically
+and the differences (fill price, fee, net P&L) are logged, so you see exactly how
+optimistic/pessimistic the sim is.
+
+```bash
+# .env: SYNTHESIS_API_KEY=...  SYNTHESIS_WALLET_ID=...   (funded wallet)
+python -m evolver calibrate --yes \
+    --trades 12 --stake 1 \
+    --strategy-file examples/range_position_revert.py
+```
+
+Order placement uses `POST /api/v1/wallet/pol/{wallet_id}/order`
+(`type=MARKET`, `units=USDC`) with a slippage-cap price; the real fill's price,
+shares, and fee come straight from the response. Output: a per-trade table plus
+aggregate accuracy (mean fill-price error, fee error, and **net-P&L bias =
+real − paper**, where negative means the paper trade is optimistic) at
+`runs/calibration_report.md`, with every row (incl. the raw order response)
+persisted to the `calibration` table.
+
+**Safety:** real orders fire only with `--yes` **and** credentials set; every
+order carries a slippage cap; the stake is capped by `max_live_stake` (default
+$5); and repeated order failures abort the run. The driver defaults to a built-in
+"buy Up at open" probe (trades every window); `--strategy-file` / `--strategy`
+override it. Note a *selective* driver (like `range_position_revert`) may pass
+many windows, so collecting N real trades can take a while — only windows where it
+actually trades count toward N. The rest of evolver stays **paper-only**; this is
+the one command that touches real funds.
 
 ---
 

@@ -15,13 +15,16 @@ import logging
 import shutil
 import sys
 
+from . import calibrate as calib
 from .config import Config
 from .env import find_dotenv, load_dotenv
+from .execution import build_synthesis_executor
 from .market import LiveMarket
 from .openrouter import OpenRouterClient
 from .reporting import format_leaderboard
 from .replay import replay_strategy
 from .runner import run_loop
+from .sandbox import SandboxError
 from .store import Store
 
 
@@ -130,6 +133,64 @@ def cmd_replay(config: Config, args) -> int:
     return 0
 
 
+def cmd_calibrate(config: Config, args) -> int:
+    """Place real $-stake orders alongside the paper sim and compare them."""
+    stake = args.stake if args.stake is not None else config.live_stake
+    trades = args.trades if args.trades is not None else config.calibration_trades
+
+    if stake > config.max_live_stake:
+        print(f"ERROR: stake ${stake:.2f} exceeds max_live_stake ${config.max_live_stake:.2f}. "
+              f"Raise Config.max_live_stake if you really mean it.", file=sys.stderr)
+        return 2
+    if not args.yes:
+        print("This places REAL orders on live markets with real money.\n"
+              f"It will place up to {trades} orders of ${stake:.2f} each via Synthesis.\n"
+              "Re-run with --yes to proceed.", file=sys.stderr)
+        return 2
+    if not config.synthesis_api_key or not config.synthesis_wallet_id:
+        print("ERROR: set SYNTHESIS_API_KEY and SYNTHESIS_WALLET_ID (in .env) first.", file=sys.stderr)
+        return 2
+
+    config.live_stake = stake
+    store = Store(config)
+    try:
+        driver = calib.load_driver(config, store, args.strategy_file, args.strategy)
+    except (SandboxError, ValueError, FileNotFoundError) as exc:
+        print(f"ERROR loading driver strategy: {exc}", file=sys.stderr)
+        store.close()
+        return 1
+
+    real_executor = build_synthesis_executor(config)
+    balance = real_executor.client.get_balance()
+    bal_str = f"${balance:.2f}" if balance is not None else "unknown"
+    print(f"Driver: {driver.name}  ·  wallet {config.synthesis_wallet_id}  ·  balance {bal_str}")
+    print(f"Placing up to {trades} real orders of ${stake:.2f} on live markets. Ctrl-C to abort.\n")
+
+    market = LiveMarket(config)
+    try:
+        records = calib.run_calibration(
+            market, real_executor, driver, store, config, trades,
+            on_record=lambda r: print(calib.format_record_line(r), flush=True),
+        )
+    except KeyboardInterrupt:
+        print("\nInterrupted — writing report for trades collected so far.")
+        records = store.calibration_rows()
+    finally:
+        market.close()
+
+    path = calib.write_report(config, store.calibration_rows())
+    s = calib.summarize(store.calibration_rows())
+    if s["n"]:
+        print(f"\nCollected {s['n']} paired trades.")
+        print(f"  mean |fill-price error| : {s['mean_abs_price_err']*100:.2f}c")
+        print(f"  net-P&L bias (real-paper): ${s['mean_pnl_bias']:+.4f}/trade "
+              f"({'paper OPTIMISTIC' if s['mean_pnl_bias'] < 0 else 'paper conservative'})")
+        print(f"  totals: paper ${s['paper_total_pnl']:+.3f} · real ${s['real_total_pnl']:+.3f}")
+    print(f"Report: {path}")
+    store.close()
+    return 0
+
+
 def cmd_reset(config: Config, args) -> int:
     if not args.yes:
         print("Refusing to reset without --yes.", file=sys.stderr)
@@ -163,6 +224,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay = sub.add_parser("replay", help="re-score a strategy against archived windows")
     p_replay.add_argument("name")
     p_replay.set_defaults(func=cmd_replay)
+
+    p_cal = sub.add_parser("calibrate", help="place real $-stake orders vs paper to measure sim accuracy")
+    p_cal.add_argument("--trades", type=int, default=None, help="number of real trades to collect")
+    p_cal.add_argument("--stake", type=float, default=None, help="real USDC per order (default 1.0)")
+    p_cal.add_argument("--strategy-file", default=None, help="path to a .py driver strategy")
+    p_cal.add_argument("--strategy", default=None, help="name of a stored strategy to drive orders")
+    p_cal.add_argument("--yes", action="store_true", help="confirm placing REAL orders with real money")
+    p_cal.set_defaults(func=cmd_calibrate)
 
     p_reset = sub.add_parser("reset", help="wipe all evolver state")
     p_reset.add_argument("--yes", action="store_true", help="confirm destructive reset")
