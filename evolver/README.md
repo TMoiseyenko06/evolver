@@ -144,10 +144,37 @@ markdown report in `runs/gen{G}_report.md` is still written regardless.
   `outcomes`/`clobTokenIds` arrays, which have shipped flipped.
 - **Candles/spot** come from **Coinbase Exchange** (Binance blocks US IPs). The
   forming candle is never fed to a strategy.
+- **Live feed is WebSocket-first** (see below): during `run`, order books and spot
+  stream in real time; REST is the fallback and the source for closed candles.
 - **Resolution** scores immediately from the Coinbase 5m candle (`close > open`
   → Up, tie → Down), then reconciles against Gamma's official `outcomePrices`;
   the official side wins and any mismatch is flagged/logged (trades are scored to
   the official side — i.e. mismatched paper trades are effectively flipped).
+
+---
+
+## Live data feed (WebSocket)
+
+For the live `run`, market data streams over WebSockets so every poll reads
+always-fresh, near-zero-latency state instead of a REST snapshot up to a poll old:
+
+- **Order books** — Polymarket CLOB market channel
+  (`wss://ws-subscriptions-clob.polymarket.com/ws/market`, public): a background
+  thread maintains each token's book from a `book` snapshot plus `price_change`
+  deltas, re-subscribing to the new tokens each window.
+- **Spot** — Coinbase Exchange `ticker`
+  (`wss://ws-feed.exchange.coinbase.com`, public).
+- **REST fallback** — if a stream is disconnected or its last update is older than
+  `ws_staleness_seconds`, that poll falls back to the existing REST path, so a
+  book/spot is never missing. Closed 1-min candles and resolution always use REST.
+
+The WS layer lives in `polybot/streaming.py` (socket I/O kept thin; all book
+parsing/mutation is pure, unit-tested functions). Total WS failure is non-fatal —
+the run simply degrades to REST. Set `Config.use_websocket = False` to force REST.
+
+Polls fire at a **constant, drift-free cadence** (anchored to `open + k·poll_interval`
+on a monotonic clock), with one guaranteed final poll `final_poll_lead_seconds`
+before close so late-window strategies still act in the closing seconds.
 
 ---
 
@@ -219,7 +246,9 @@ python -m evolver run
 ```
 
 All numeric knobs (population size, windows/generation, stake, bankroll, timeout,
-thresholds) live in `evolver/config.py`.
+thresholds) live in `evolver/config.py`, including the live-feed settings:
+`use_websocket` (default on), `ws_staleness_seconds` (REST-fallback threshold),
+`poll_interval_seconds` (constant cadence), and `final_poll_lead_seconds`.
 
 ---
 

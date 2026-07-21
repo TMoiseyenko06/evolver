@@ -53,6 +53,7 @@ def cmd_run(config: Config, args) -> int:
     except KeyboardInterrupt:
         print("\nInterrupted — state is persisted; rerun `python -m evolver run` to resume.")
     finally:
+        market.close()
         store.close()
     return 0
 

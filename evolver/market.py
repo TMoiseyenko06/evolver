@@ -19,6 +19,7 @@ from typing import Dict, Iterator, List, Optional, Protocol
 
 from polybot import candles as cb
 from polybot import polymarket as pm
+from polybot import streaming
 
 from .config import Config
 from .models import PollSnapshot
@@ -65,6 +66,27 @@ class LiveMarket:
 
     def __init__(self, config: Config):
         self.config = config
+        self._book_stream: streaming.OrderBookStream = None
+        self._spot_stream: streaming.SpotStream = None
+
+    def _ensure_streams(self) -> None:
+        """Lazily start the WebSocket feeds (once) when enabled."""
+        if not self.config.use_websocket:
+            return
+        if self._book_stream is None:
+            self._book_stream = streaming.OrderBookStream(self.config.pm_ws_url)
+            self._book_stream.start()
+        if self._spot_stream is None:
+            self._spot_stream = streaming.SpotStream(self.config.product, self.config.coinbase_ws_url)
+            self._spot_stream.start()
+
+    def close(self) -> None:
+        """Stop the WebSocket feeds. Safe to call more than once."""
+        for stream in (self._book_stream, self._spot_stream):
+            if stream is not None:
+                stream.stop()
+        self._book_stream = None
+        self._spot_stream = None
 
     # --- discovery -------------------------------------------------------- #
     def next_window(self) -> WindowHandle:
@@ -90,6 +112,10 @@ class LiveMarket:
                         end=w.end,
                         token_map=token_map,
                     )
+                    # Point the live book feed at this window's tokens.
+                    self._ensure_streams()
+                    if self._book_stream is not None:
+                        self._book_stream.resubscribe([token_map["Up"], token_map["Down"]])
                     self._wait_until(handle.start)
                     return handle
             time.sleep(self.config.poll_interval_seconds)
@@ -116,7 +142,18 @@ class LiveMarket:
 
     # --- polling ---------------------------------------------------------- #
     def poll_snapshots(self, handle: WindowHandle) -> Iterator[PollSnapshot]:
-        """Yield a snapshot at window open and every ``poll_interval`` seconds."""
+        """Yield a snapshot at window open and at a constant cadence thereafter.
+
+        Polls are anchored to ``open + k*poll_interval`` on a monotonic clock, so
+        the interval is exactly constant and drift-free — sampling the in-memory
+        WS state is cheap, unlike per-poll REST calls. A final poll is guaranteed
+        ``final_poll_lead_seconds`` before close so late-window strategies still
+        get a decision in the closing seconds.
+        """
+        self._ensure_streams()
+        interval = float(self.config.poll_interval_seconds)
+        lead = float(self.config.final_poll_lead_seconds)
+        anchor = time.monotonic()
         poll_index = 0
         window_open_price = 0.0
         while True:
@@ -126,7 +163,7 @@ class LiveMarket:
             if poll_index == 0:
                 window_open_price = spot
                 handle.window_open_price = spot
-            snap = PollSnapshot(
+            yield PollSnapshot(
                 poll_index=poll_index,
                 seconds_remaining=max(0, seconds_remaining),
                 window_open_price=window_open_price,
@@ -134,13 +171,24 @@ class LiveMarket:
                 candles=self._safe_candles(),
                 books=self._safe_books(handle.token_map),
             )
-            yield snap
             poll_index += 1
             if seconds_remaining <= 0:
                 return
-            time.sleep(min(self.config.poll_interval_seconds, max(1, seconds_remaining)))
+            # Sleep to the next constant tick, but never past the close: if the
+            # next tick would land after the window ends, take one final poll
+            # `lead` seconds before close instead.
+            secs_to_end = (handle.end - dt.datetime.now(handle.end.tzinfo)).total_seconds()
+            delay = (anchor + poll_index * interval) - time.monotonic()
+            if delay >= secs_to_end:
+                delay = max(0.0, secs_to_end - lead)
+            if delay > 0:
+                time.sleep(delay)
 
     def _safe_spot(self) -> float:
+        if self._spot_stream is not None:
+            price = self._spot_stream.get_spot(self.config.ws_staleness_seconds)
+            if price is not None:
+                return price
         try:
             return cb.spot(self.config.product)
         except Exception:  # noqa: BLE001
@@ -156,6 +204,12 @@ class LiveMarket:
         books: Dict[str, dict] = {}
         for side in ("Up", "Down"):
             token_id = token_map.get(side)
+            # Prefer the live WS book; fall back to REST when stale/absent.
+            if token_id and self._book_stream is not None:
+                ws_book = self._book_stream.get_book(token_id, self.config.ws_staleness_seconds)
+                if ws_book is not None:
+                    books[side] = ws_book
+                    continue
             try:
                 books[side] = pm.order_book(token_id) if token_id else {"asks": [], "bids": []}
             except Exception:  # noqa: BLE001

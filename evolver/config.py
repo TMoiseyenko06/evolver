@@ -34,6 +34,16 @@ class Config:
     window_seconds: int = 300
     # Print a per-strategy status board after every resolved 5-minute window.
     live_window_reports: bool = True
+    # A guaranteed final poll lands this many seconds before window close; every
+    # earlier interval is exactly `poll_interval_seconds` (drift-free, anchored).
+    final_poll_lead_seconds: float = 2.0
+
+    # --- websocket market feed (live run) ---
+    use_websocket: bool = True
+    pm_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    coinbase_ws_url: str = "wss://ws-feed.exchange.coinbase.com"
+    # A WS value older than this (or a disconnected stream) triggers a REST fallback.
+    ws_staleness_seconds: float = 5.0
 
     # --- sandbox / safety ---
     decide_timeout_seconds: float = 1.0

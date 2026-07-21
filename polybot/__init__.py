@@ -16,6 +16,6 @@ that touches the network is isolated here so that ``evolver`` can be driven with
 a mock market provider in tests without any HTTP.
 """
 
-from . import candles, db, fees, polymarket  # noqa: F401
+from . import candles, db, fees, polymarket, streaming  # noqa: F401
 
-__all__ = ["candles", "db", "fees", "polymarket"]
+__all__ = ["candles", "db", "fees", "polymarket", "streaming"]
