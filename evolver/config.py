@@ -34,6 +34,9 @@ class Config:
     window_seconds: int = 300
     # Print a per-strategy status board after every resolved 5-minute window.
     live_window_reports: bool = True
+    # Resolve windows in a background worker so the trader starts the next window
+    # immediately instead of blocking on settlement (avoids missing windows).
+    overlap_resolution: bool = True
     # A guaranteed final poll lands this many seconds before window close; every
     # earlier interval is exactly `poll_interval_seconds` (drift-free, anchored).
     final_poll_lead_seconds: float = 2.0

@@ -23,6 +23,8 @@ spec calls out) drive the *leaderboard*, not the cull.
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from typing import Dict, List, Optional, Tuple
 
 from .config import Config
@@ -39,6 +41,10 @@ from .strategy import LoadedStrategy
 from .store import Store
 
 log = logging.getLogger("evolver")
+
+# Guards strategy P&L/stat mutations shared between the trader thread and the
+# background resolution worker.
+_stats_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
@@ -75,7 +81,9 @@ def run_window(
             if action is None:
                 continue
             side = action["side"]
-            if strat.bankroll < config.stake:
+            with _stats_lock:  # consistent read vs. the background resolver's writes
+                affordable = strat.bankroll >= config.stake
+            if not affordable:
                 # Can't afford the stake — treat as a forced pass, logged.
                 decisions[-1] = Decision(strat.name, snap.poll_index, None, "insufficient bankroll")
                 continue
@@ -127,6 +135,100 @@ def resolve_window(
 # --------------------------------------------------------------------------- #
 # One generation
 # --------------------------------------------------------------------------- #
+def _resolve_and_record(strategies, market, store, config, generation, seq, handle, decisions, fills, snaps):
+    """Resolve one traded window (blocking wait), score, persist, print the board.
+
+    Returns True if the window resolved (counts toward the generation).
+    """
+    resolution = market.resolve(handle)  # waits for official settlement
+    with _stats_lock:
+        trades, resolved, mismatch = resolve_window(strategies, fills, resolution, handle.window_id)
+
+    candle_hash = hash_candles(snaps[-1].candles, snaps[-1].window_open_price) if snaps else ""
+    window = WindowData(
+        window_id=handle.window_id,
+        condition_id=handle.condition_id,
+        title=handle.title,
+        start_iso=handle.start.isoformat() if hasattr(handle.start, "isoformat") else str(handle.start),
+        end_iso=handle.end.isoformat() if hasattr(handle.end, "isoformat") else str(handle.end),
+        token_map=handle.token_map,
+        polls=snaps,
+        coinbase_side=resolution.coinbase_side,
+        official_side=resolution.official_side,
+        resolved_side=resolved,
+        mismatch=mismatch,
+        candle_state_hash=candle_hash,
+    )
+    store.save_window(generation, seq, window, decisions, trades)
+    if resolved is None:
+        log.warning("window %s did not resolve; not counting toward generation", handle.window_id)
+        return False, trades, resolved, mismatch
+    if mismatch:
+        log.warning(
+            "resolution mismatch on %s: coinbase=%s official=%s (trades scored to official)",
+            handle.window_id, resolution.coinbase_side, resolution.official_side,
+        )
+    return True, trades, resolved, mismatch
+
+
+class _ResolutionPipeline:
+    """Background worker that resolves+scores+persists traded windows in FIFO order.
+
+    Lets the trader move on to the next window while a prior one waits for
+    settlement, so consecutive 5-minute windows aren't missed.
+    """
+
+    def __init__(self, strategies, market, store, config):
+        self._args = (strategies, market, store, config)
+        self._q: "queue.Queue" = queue.Queue()
+        self._count_lock = threading.Lock()
+        self.resolved_count = 0
+        self._thread = threading.Thread(target=self._run, name="resolver", daemon=True)
+        self._thread.start()
+
+    def submit(self, item) -> None:
+        self._q.put(item)
+
+    def _run(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                self._q.task_done()
+                break
+            try:
+                self._process(item)
+            except Exception as exc:  # noqa: BLE001 — never kill the worker
+                log.error("resolution worker error: %s", exc)
+            finally:
+                self._q.task_done()
+
+    def _process(self, item) -> None:
+        strategies, market, store, config = self._args
+        generation, seq, handle, decisions, fills, snaps = item
+        counted, trades, resolved, mismatch = _resolve_and_record(
+            strategies, market, store, config, generation, seq, handle, decisions, fills, snaps
+        )
+        if not counted:
+            return
+        with self._count_lock:
+            self.resolved_count += 1
+            num = self.resolved_count
+        if config.live_window_reports:
+            with _stats_lock:
+                board = format_window_status(
+                    generation, num, config.windows_per_generation,
+                    handle.window_id, resolved, mismatch, strategies, trades, title=handle.title,
+                )
+            print(board, flush=True)
+
+    def join(self) -> None:
+        self._q.join()
+
+    def stop(self) -> None:
+        self._q.put(None)
+        self._thread.join(timeout=5)
+
+
 def run_generation(
     strategies: List[LoadedStrategy],
     market: MarketProvider,
@@ -134,52 +236,38 @@ def run_generation(
     config: Config,
     generation: int,
 ) -> None:
-    """Forward-test all strategies over ``windows_per_generation`` resolved windows."""
+    """Forward-test all strategies over ``windows_per_generation`` resolved windows.
+
+    Trading is real-time and sequential (windows are consecutive), but resolution
+    runs in a background worker so the trader starts the next window immediately
+    instead of blocking on settlement. The worker is drained before ranking.
+    """
     for s in strategies:
         s.start_generation()
     store.start_generation(generation)
 
-    resolved_count = 0
+    target = config.windows_per_generation
+    pipeline = _ResolutionPipeline(strategies, market, store, config)
     seq = 0
-    while resolved_count < config.windows_per_generation:
-        handle = market.next_window()
-        decisions, fills, snaps = run_window(strategies, market.poll_snapshots(handle), config)
-        resolution = market.resolve(handle)
-        trades, resolved, mismatch = resolve_window(strategies, fills, resolution, handle.window_id)
-
-        candle_hash = hash_candles(snaps[-1].candles, snaps[-1].window_open_price) if snaps else ""
-        window = WindowData(
-            window_id=handle.window_id,
-            condition_id=handle.condition_id,
-            title=handle.title,
-            start_iso=handle.start.isoformat() if hasattr(handle.start, "isoformat") else str(handle.start),
-            end_iso=handle.end.isoformat() if hasattr(handle.end, "isoformat") else str(handle.end),
-            token_map=handle.token_map,
-            polls=snaps,
-            coinbase_side=resolution.coinbase_side,
-            official_side=resolution.official_side,
-            resolved_side=resolved,
-            mismatch=mismatch,
-            candle_state_hash=candle_hash,
-        )
-        store.save_window(generation, seq, window, decisions, trades)
-        seq += 1
-
-        if resolved is None:
-            log.warning("window %s did not resolve; not counting toward generation", handle.window_id)
-            continue
-        if mismatch:
-            log.warning(
-                "resolution mismatch on %s: coinbase=%s official=%s (trades scored to official)",
-                handle.window_id, resolution.coinbase_side, resolution.official_side,
-            )
-        resolved_count += 1
-        if config.live_window_reports:
-            print(format_window_status(
-                generation, resolved_count, config.windows_per_generation,
-                handle.window_id, resolved, mismatch, strategies, trades,
-                title=handle.title,
-            ), flush=True)
+    try:
+        # Trade `target` windows back-to-back; resolution happens in the worker.
+        for _ in range(target):
+            handle = market.next_window()
+            decisions, fills, snaps = run_window(strategies, market.poll_snapshots(handle), config)
+            pipeline.submit((generation, seq, handle, decisions, fills, snaps))
+            seq += 1
+            if not config.overlap_resolution:
+                pipeline.join()  # sequential mode: settle before the next window
+        pipeline.join()
+        # Top up only if some windows failed to resolve (rare — settlement waits).
+        while pipeline.resolved_count < target:
+            handle = market.next_window()
+            decisions, fills, snaps = run_window(strategies, market.poll_snapshots(handle), config)
+            pipeline.submit((generation, seq, handle, decisions, fills, snaps))
+            seq += 1
+            pipeline.join()
+    finally:
+        pipeline.stop()
 
 
 # --------------------------------------------------------------------------- #

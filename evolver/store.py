@@ -14,6 +14,7 @@ the candle-state hash, full poll snapshots (books included), every decision
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -163,6 +164,9 @@ class Store:
         config.ensure_dirs()
         self.conn = db.connect(config.db_path)
         db.apply_schema(self.conn, SCHEMA)
+        # Guards writes shared between the trader thread and the background
+        # resolution worker (see evolver.generation).
+        self.lock = threading.Lock()
 
     def close(self) -> None:
         self.conn.close()
@@ -292,6 +296,10 @@ class Store:
         decisions: List[Decision],
         trades: List[TradeResult],
     ) -> int:
+        with self.lock:
+            return self._save_window_locked(generation, seq, window, decisions, trades)
+
+    def _save_window_locked(self, generation, seq, window, decisions, trades) -> int:
         cur = self.conn.execute(
             "INSERT INTO windows (generation, seq, window_id, condition_id, title,"
             " start_iso, end_iso, candle_state_hash, coinbase_side, official_side,"

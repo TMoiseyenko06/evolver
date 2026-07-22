@@ -13,8 +13,12 @@ from typing import Union
 
 
 def connect(path: Union[str, Path]) -> sqlite3.Connection:
-    """Open a SQLite connection with dict-like rows and FK enforcement."""
-    conn = sqlite3.connect(str(path))
+    """Open a SQLite connection with dict-like rows and FK enforcement.
+
+    ``check_same_thread=False`` lets the background resolution worker share the
+    connection with the trader thread; callers serialize writes with a lock.
+    """
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
