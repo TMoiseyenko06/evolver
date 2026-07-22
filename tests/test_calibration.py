@@ -137,6 +137,62 @@ def test_extract_usdc_balance_deeply_nested():
     assert extract_usdc_balance(payload) == pytest.approx(7.25)
 
 
+def test_parse_markets_builds_5min_windows_with_token_map():
+    import datetime as dt
+    from polybot.synthesis import parse_markets
+
+    now = dt.datetime(2026, 7, 22, 12, 0, tzinfo=dt.timezone.utc)  # 8:00 AM EDT
+    payload = {"success": True, "response": [{
+        "markets": [
+            {
+                "condition_id": "0xabc",
+                "question": "Bitcoin Up or Down - July 22, 8:00AM-8:05AM ET",
+                "resolved": False,
+                "left_outcome": "Up", "left_token_id": "111",
+                "right_outcome": "Down", "right_token_id": "222",
+            },
+            {   # a 15-minute market must be excluded
+                "condition_id": "0xdef",
+                "question": "Bitcoin Up or Down - July 22, 8:00AM-8:15AM ET",
+                "resolved": False,
+                "left_outcome": "Up", "left_token_id": "333",
+                "right_outcome": "Down", "right_token_id": "444",
+            },
+        ]
+    }]}
+    windows = parse_markets(payload, now=now, window_seconds=300)
+    assert len(windows) == 1
+    w = windows[0]
+    assert w.condition_id == "0xabc"
+    assert w.token_map == {"Up": "111", "Down": "222"}
+
+
+def test_parse_markets_skips_resolved():
+    import datetime as dt
+    from polybot.synthesis import parse_markets
+
+    now = dt.datetime(2026, 7, 22, 12, 0, tzinfo=dt.timezone.utc)
+    payload = [{"markets": [{
+        "condition_id": "0x1", "question": "Bitcoin Up or Down - July 22, 8:00AM-8:05AM ET",
+        "resolved": True, "left_outcome": "Up", "left_token_id": "1",
+        "right_outcome": "Down", "right_token_id": "2",
+    }]}]
+    assert parse_markets(payload, now=now) == []
+
+
+def test_parse_orderbook_maps_price_size_dicts():
+    from polybot.synthesis import parse_orderbook
+
+    payload = {"response": [{"venue": "polymarket", "orderbook": {
+        "token_id": "111",
+        "bids": {"0.61": "1000", "0.60": "800"},
+        "asks": {"0.63": "600", "0.62": "900"},
+    }}]}
+    book = parse_orderbook(payload)
+    assert book["asks"] == [(0.62, 900.0), (0.63, 600.0)]   # ascending
+    assert book["bids"] == [(0.61, 1000.0), (0.60, 800.0)]  # descending
+
+
 def test_get_balance_parses_nested_response(monkeypatch):
     import polybot.synthesis as syn
 

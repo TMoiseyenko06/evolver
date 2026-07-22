@@ -11,7 +11,8 @@ python -m evolver leaderboard  # lifetime rankings, generations survived
 python -m evolver show NAME     # a strategy's code, lineage, full stat history
 python -m evolver replay NAME   # re-score a strategy against archived windows
 python -m evolver calibrate --yes  # place real $-stake orders vs paper (Synthesis)
-python -m evolver reset --yes   # wipe db + runs/ + strategies/
+python -m evolver synthesis-markets  # list the 5-min markets Synthesis is showing
+python -m evolver reset --yes   # wipe db + runs/ + strategies/  (add --keep-strategies to keep them)
 ```
 
 ---
@@ -135,11 +136,16 @@ markdown report in `runs/gen{G}_report.md` is still written regardless.
 
 ## Market plumbing (behaviors preserved from the spec)
 
-- **Discovery** hits Gamma `/markets` with active/closed/archived filters **and
-  `end_date_min=now`** (without it Gamma returns months-old stale markets). The
-  window is parsed from the title (`"Bitcoin Up or Down - July 20,
-  3:00PM-3:05PM ET"`, America/New_York, year inferred). Discovery retries if the
-  listing is late.
+- **Discovery** defaults to **Synthesis** (the actual trading venue): it lists
+  `GET /api/v1/polymarket/markets?title=Bitcoin Up or Down`, filters to markets
+  whose parsed start→end span is exactly **5 minutes** (so hourly/15-min markets
+  are skipped), and reads the `Up`/`Down` token ids straight from
+  `left/right_outcome`+`left/right_token_id`. It falls back to Gamma `/markets`
+  (with `end_date_min=now`) if Synthesis returns nothing. Set
+  `EVOLVER_MARKET_SOURCE=polymarket` to force Gamma. Order books likewise prefer
+  the Synthesis `/markets/orderbooks` feed, then the WS book, then the Gamma CLOB.
+  `python -m evolver synthesis-markets` prints exactly what Synthesis is listing
+  so you can double-check.
 - **Token mapping** comes from the CLOB `/markets/{conditionId}` response, where
   each token has an explicit `"outcome"` label — **never** from Gamma's parallel
   `outcomes`/`clobTokenIds` arrays, which have shipped flipped.

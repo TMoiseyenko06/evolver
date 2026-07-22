@@ -199,6 +199,33 @@ def cmd_calibrate(config: Config, args) -> int:
     return 0
 
 
+def cmd_synthesis_markets(config: Config, args) -> int:
+    """Show the 5-minute Bitcoin Up/Down windows Synthesis is currently listing."""
+    from polybot import synthesis
+
+    client = synthesis.SynthesisClient(
+        api_key=config.synthesis_api_key, wallet_id=config.synthesis_wallet_id,
+        base_url=config.synthesis_base_url,
+    )
+    try:
+        payload = synthesis.list_polymarket_markets(client)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR calling Synthesis /polymarket/markets: {exc}", file=sys.stderr)
+        return 1
+    windows = synthesis.parse_markets(payload, window_seconds=config.window_seconds)
+    if not windows:
+        raw = json.dumps(payload)[:600] if not isinstance(payload, str) else payload[:600]
+        print("No 5-minute Bitcoin Up/Down windows parsed from Synthesis.")
+        print(f"raw (first 600 chars): {raw}")
+        return 1
+    print(f"Synthesis is listing {len(windows)} matching 5-minute window(s):")
+    for w in windows:
+        print(f"  {w.title}")
+        print(f"    condition_id={w.condition_id}")
+        print(f"    Up={w.token_map.get('Up')}  Down={w.token_map.get('Down')}")
+    return 0
+
+
 def cmd_reset(config: Config, args) -> int:
     if not args.yes:
         print("Refusing to reset without --yes.", file=sys.stderr)
@@ -248,6 +275,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("--strategy", default=None, help="name of a stored strategy to drive orders")
     p_cal.add_argument("--yes", action="store_true", help="confirm placing REAL orders with real money")
     p_cal.set_defaults(func=cmd_calibrate)
+
+    sub.add_parser("synthesis-markets",
+                   help="list the 5-min Bitcoin Up/Down markets Synthesis is showing"
+                   ).set_defaults(func=cmd_synthesis_markets)
 
     p_reset = sub.add_parser("reset", help="wipe all evolver state")
     p_reset.add_argument("--yes", action="store_true", help="confirm destructive reset")

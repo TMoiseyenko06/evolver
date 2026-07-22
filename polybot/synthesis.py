@@ -19,10 +19,13 @@ re-sent, so we can't accidentally double-fill real money.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
+
+from . import polymarket as pm
 
 
 class SynthesisError(RuntimeError):
@@ -56,7 +59,10 @@ class SynthesisClient:
     timeout: float = 30.0
 
     def _headers(self) -> Dict[str, str]:
-        return {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:  # market-data endpoints are public; only send key when set
+            headers["X-API-KEY"] = self.api_key
+        return headers
 
     def _wallet_path(self, suffix: str = "") -> str:
         return f"{self.base_url}/api/v1/wallet/pol/{self.wallet_id}{suffix}"
@@ -274,3 +280,115 @@ def _first_present(data: Dict[str, Any], keys) -> Any:
         if isinstance(data, dict) and k in data:
             return data[k]
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Market discovery + order books (Synthesis is the user's actual trading venue)
+# --------------------------------------------------------------------------- #
+# GET /api/v1/polymarket/markets  -> events with nested `markets`; per market:
+#   condition_id, question, created_at, ends_at, active, resolved,
+#   left_token_id/right_token_id, left_outcome/right_outcome, left_price/right_price
+# POST /api/v1/markets/orderbooks -> body [token_id,...]; per token an `orderbook`
+#   with bids/asks as {price_str: size_str} maps.
+
+def _as_list(body: Any) -> List[Any]:
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        for k in ("events", "markets", "data", "results", "orderbooks"):
+            if isinstance(body.get(k), list):
+                return body[k]
+        return [body]
+    return []
+
+
+def list_polymarket_markets(
+    client: "SynthesisClient", title: str = "Bitcoin Up or Down", limit: int = 250,
+    sort: str = "ends_at", order: str = "ASC",
+) -> Any:
+    """List markets by title (the `title` filter reliably surfaces the 5-min
+    series; a broad `query` does not), soonest-ending first."""
+    resp = requests.get(
+        f"{client.base_url}/api/v1/polymarket/markets",
+        params={"title": title, "limit": limit, "sort": sort, "order": order},
+        headers=client._headers(), timeout=client.timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_orderbook(client: "SynthesisClient", token_id: str) -> Any:
+    resp = requests.post(
+        f"{client.base_url}/api/v1/markets/orderbooks",
+        json=[str(token_id)], headers=client._headers(), timeout=client.timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def parse_markets(payload: Any, now: Optional[dt.datetime] = None,
+                  window_seconds: Optional[int] = 300, tol: int = 60) -> List["pm.Window"]:
+    """Turn a Synthesis markets response into Bitcoin Up/Down 5-min windows.
+
+    Reuses ``polybot.polymarket`` title parsing; builds each window's token_map
+    directly from the ``left/right_outcome`` + ``left/right_token_id`` fields.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    now_et = now.astimezone(pm.ET)
+    windows: List[pm.Window] = []
+    for event in _as_list(_unwrap(payload)):
+        if not isinstance(event, dict):
+            continue
+        markets = event.get("markets") if isinstance(event.get("markets"), list) else [event]
+        for m in markets:
+            if not isinstance(m, dict):
+                continue
+            question = m.get("question") or m.get("title") or ""
+            if "bitcoin up or down" not in question.lower():
+                continue
+            if m.get("resolved"):
+                continue
+            parsed = pm.parse_window_title(question, now_et)
+            if not parsed:
+                continue
+            start, end = parsed
+            if window_seconds is not None and abs((end - start).total_seconds() - window_seconds) > tol:
+                continue
+            cond = m.get("condition_id") or m.get("conditionId")
+            token_map: Dict[str, str] = {}
+            for out_key, tok_key in (("left_outcome", "left_token_id"), ("right_outcome", "right_token_id")):
+                out, tok = m.get(out_key), m.get(tok_key)
+                if out and tok:
+                    token_map[str(out)] = str(tok)
+            if not cond or token_map.get("Up") is None or token_map.get("Down") is None:
+                continue
+            windows.append(pm.Window(condition_id=str(cond), title=question,
+                                     start=start, end=end, token_map=token_map, raw=m))
+    return windows
+
+
+def parse_orderbook(payload: Any) -> Dict[str, List]:
+    """Convert a Synthesis orderbook (bids/asks price->size maps) to our shape."""
+    body = _unwrap(payload)
+    entries = _as_list(body)
+    entry = entries[0] if entries else body
+    ob = entry.get("orderbook", entry) if isinstance(entry, dict) else {}
+    if not isinstance(ob, dict):
+        return {"asks": [], "bids": []}
+
+    def _levels(m: Any, reverse: bool) -> List:
+        out = []
+        if isinstance(m, dict):
+            for price, size in m.items():
+                out.append((_num(price), _num(size)))
+        elif isinstance(m, list):
+            for lvl in m:
+                if isinstance(lvl, dict):
+                    out.append((_num(lvl.get("price")), _num(lvl.get("size"))))
+                elif isinstance(lvl, (list, tuple)) and len(lvl) >= 2:
+                    out.append((_num(lvl[0]), _num(lvl[1])))
+        out = [(p, s) for p, s in out if p > 0 and s > 0]
+        out.sort(key=lambda x: x[0], reverse=reverse)
+        return out
+
+    return {"asks": _levels(ob.get("asks"), False), "bids": _levels(ob.get("bids"), True)}

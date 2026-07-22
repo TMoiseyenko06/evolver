@@ -21,6 +21,7 @@ from typing import Dict, Iterator, List, Optional, Protocol
 from polybot import candles as cb
 from polybot import polymarket as pm
 from polybot import streaming
+from polybot import synthesis
 
 from .config import Config
 from .models import PollSnapshot
@@ -71,9 +72,19 @@ class LiveMarket:
         self.config = config
         self._book_stream: streaming.OrderBookStream = None
         self._spot_stream: streaming.SpotStream = None
+        self._synth = None  # lazily-built SynthesisClient for market data
         # Windows already handed out, so we never return the same market twice
         # (one trade per distinct 5-minute window).
         self._returned_windows: set = set()
+
+    def _synth_client(self):
+        if self._synth is None:
+            self._synth = synthesis.SynthesisClient(
+                api_key=self.config.synthesis_api_key,
+                wallet_id=self.config.synthesis_wallet_id,
+                base_url=self.config.synthesis_base_url,
+            )
+        return self._synth
 
     def _ensure_streams(self) -> None:
         """Lazily start the WebSocket feeds (once) when enabled and available."""
@@ -115,7 +126,10 @@ class LiveMarket:
             now = dt.datetime.now(dt.timezone.utc)
             w = self._next_unreturned(self._safe_discover(now), now)
             if w is not None:
-                token_map = self._safe_token_map(w.condition_id)
+                # Synthesis discovery already carries the outcome->token map; only
+                # hit the CLOB when it doesn't (e.g. the Gamma fallback path).
+                token_map = w.token_map if (w.token_map.get("Up") and w.token_map.get("Down")) \
+                    else self._safe_token_map(w.condition_id)
                 if token_map.get("Up") and token_map.get("Down"):
                     self._returned_windows.add(w.window_id)
                     handle = WindowHandle(
@@ -135,6 +149,15 @@ class LiveMarket:
             time.sleep(self.config.poll_interval_seconds)
 
     def _safe_discover(self, now) -> List[pm.Window]:
+        # Prefer Synthesis (the actual trading venue); fall back to Gamma.
+        if self.config.use_synthesis_market:
+            try:
+                payload = synthesis.list_polymarket_markets(self._synth_client())
+                wins = synthesis.parse_markets(payload, now, self.config.window_seconds)
+                if wins:
+                    return wins
+            except Exception as exc:  # noqa: BLE001
+                log.debug("synthesis discovery failed, falling back to Gamma: %s", exc)
         try:
             return pm.discover_windows(now, window_seconds=self.config.window_seconds)
         except Exception:  # noqa: BLE001 — transient network, retry
@@ -224,6 +247,15 @@ class LiveMarket:
                 if ws_book is not None:
                     books[side] = ws_book
                     continue
+            # Synthesis order book (the actual venue) before the Gamma CLOB.
+            if token_id and self.config.use_synthesis_market:
+                try:
+                    book = synthesis.parse_orderbook(synthesis.fetch_orderbook(self._synth_client(), token_id))
+                    if book["asks"] or book["bids"]:
+                        books[side] = book
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 books[side] = pm.order_book(token_id) if token_id else {"asks": [], "bids": []}
             except Exception:  # noqa: BLE001

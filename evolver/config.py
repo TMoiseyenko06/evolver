@@ -72,6 +72,12 @@ class Config:
     synthesis_base_url: str = field(
         default_factory=lambda: os.environ.get("SYNTHESIS_BASE_URL", "https://synthesis.trade")
     )
+    # Pull market discovery + order books from Synthesis (the actual trading
+    # venue) instead of Polymarket Gamma/CLOB. Falls back to Gamma if Synthesis
+    # returns nothing. Set EVOLVER_MARKET_SOURCE=polymarket to force Gamma.
+    use_synthesis_market: bool = field(
+        default_factory=lambda: os.environ.get("EVOLVER_MARKET_SOURCE", "synthesis").lower() != "polymarket"
+    )
     live_stake: float = 1.0        # real USDC per calibration order
     max_live_stake: float = 5.0    # hard safety cap; refuse to place above this
     calibration_trades: int = 12   # default number of real trades to collect
