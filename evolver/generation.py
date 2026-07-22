@@ -178,6 +178,7 @@ def run_generation(
             print(format_window_status(
                 generation, resolved_count, config.windows_per_generation,
                 handle.window_id, resolved, mismatch, strategies, trades,
+                title=handle.title,
             ), flush=True)
 
 

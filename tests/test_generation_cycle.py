@@ -157,6 +157,41 @@ def test_replay_is_deterministic(tmp_path):
     assert again.stats.net_pnl == pytest.approx(result.stats.net_pnl)
 
 
+def test_reset_stats_keeps_strategies_clears_pnl(tmp_path):
+    import json as _json
+
+    cfg = make_config(tmp_path, population_size=2, survivors=1, windows_per_generation=2)
+    store = Store(cfg)
+    from evolver.generation import run_generation
+    from evolver.strategy import LoadedStrategy
+
+    pop = [
+        LoadedStrategy.create(strategy_source("mom", BODY_MOMENTUM), 1, cfg),
+        LoadedStrategy.create(strategy_source("dn", BODY_ALWAYS_DOWN), 1, cfg),
+    ]
+    for s in pop:
+        store.save_strategy(s, None)
+    run_generation(pop, MockMarket(default_window_specs()), store, cfg, 1)
+    for s in pop:
+        store.save_state(s, alive=True, generation=1)
+        store.save_gen_stats(1, s, survived=True, rank=1)
+    assert store.conn.execute("SELECT COUNT(*) c FROM windows").fetchone()["c"] > 0
+
+    store.reset_stats()
+
+    # Strategies (code) survive the reset.
+    assert store.get_strategy_row("mom") is not None and store.get_strategy_row("dn") is not None
+    # History wiped.
+    for tbl in ("windows", "trades", "gen_stats"):
+        assert store.conn.execute(f"SELECT COUNT(*) c FROM {tbl}").fetchone()["c"] == 0
+    # State zeroed but the strategy is still alive.
+    st = store.get_state_row("mom")
+    assert st["alive"] == 1
+    assert st["bankroll"] == cfg.starting_bankroll
+    assert st["generations_survived"] == 0
+    assert _json.loads(st["lifetime_json"])["net_pnl"] == 0.0
+
+
 def test_live_window_status_board_is_printed(tmp_path, capsys):
     cfg = make_config(tmp_path, population_size=3, survivors=1, windows_per_generation=4)
     store = Store(cfg)

@@ -135,6 +135,7 @@ def run_calibration(
         rec = {
             "seq": seq,
             "window_id": handle.window_id,
+            "title": handle.title,
             "driver": driver.name,
             "side": side,
             "resolved_side": resolved,
@@ -167,8 +168,9 @@ def run_calibration(
 # Reporting
 # --------------------------------------------------------------------------- #
 def format_record_line(rec: dict) -> str:
+    market = rec.get("title") or rec["window_id"]
     return (
-        f"#{rec['seq']+1} {rec['window_id']} {rec['side']} -> {rec['resolved_side']} | "
+        f"#{rec['seq']+1} {market} | {rec['side']} -> {rec['resolved_side']} | "
         f"price paper {rec['paper_price']:.3f} / real {rec['real_price']:.3f} "
         f"(Δ{rec['real_price']-rec['paper_price']:+.3f}) | "
         f"fee p {rec['paper_fee']:.4f}/r {rec['real_fee']:.4f} | "

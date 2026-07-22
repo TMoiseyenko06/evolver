@@ -203,6 +203,14 @@ def cmd_reset(config: Config, args) -> int:
     if not args.yes:
         print("Refusing to reset without --yes.", file=sys.stderr)
         return 2
+    if args.keep_strategies:
+        store = Store(config)
+        store.reset_stats()
+        store.close()
+        print("P&L reset: bankrolls back to ${:.0f}, lifetime stats/generations and "
+              "window/trade history cleared. Strategies (code + lineage) kept."
+              .format(config.starting_bankroll))
+        return 0
     for path in (config.db_path, config.db_path.with_suffix(".sqlite-wal"),
                  config.db_path.with_suffix(".sqlite-shm")):
         if path.exists():
@@ -243,6 +251,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_reset = sub.add_parser("reset", help="wipe all evolver state")
     p_reset.add_argument("--yes", action="store_true", help="confirm destructive reset")
+    p_reset.add_argument("--keep-strategies", action="store_true",
+                         help="reset P&L/bankrolls/stats/history but KEEP strategies")
     p_reset.set_defaults(func=cmd_reset)
     return parser
 

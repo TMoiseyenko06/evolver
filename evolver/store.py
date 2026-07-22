@@ -418,6 +418,28 @@ class Store:
         rows = self.conn.execute("SELECT name, source FROM strategies").fetchall()
         return {r["name"]: r["source"] for r in rows}
 
+    # --- soft reset (keep strategies, wipe P&L) --------------------------- #
+    def reset_stats(self) -> None:
+        """Zero all bankroll/stats/history but keep strategies (code + lineage).
+
+        Bankrolls return to the starting amount, lifetime stats and
+        generations-survived reset to zero, and the window/decision/trade/
+        gen-stats/calibration history is cleared. The strategies table, their
+        source files, and the prompt archive are untouched, and alive/retired
+        flags are preserved so the current population continues fresh.
+        """
+        import json as _json
+
+        zero = _json.dumps(Stats().to_json())
+        self.conn.execute(
+            "UPDATE strategy_state SET bankroll=?, generations_survived=0,"
+            " lifetime_json=?, retired_reason=NULL",
+            (self.config.starting_bankroll, zero),
+        )
+        for table in ("trades", "gen_stats", "decisions", "windows", "calibration"):
+            self.conn.execute(f"DELETE FROM {table}")
+        self.conn.commit()
+
     # --- calibration (paper-vs-real experiment) --------------------------- #
     def save_calibration(self, rec: dict) -> None:
         self.conn.execute(

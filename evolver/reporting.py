@@ -13,6 +13,13 @@ def _fmt_lineage(lineage) -> str:
     return ", ".join(lineage) if lineage else "novel"
 
 
+def _short_id(window_id: str) -> str:
+    """Abbreviate a long condition id (0x…hash) for compact display."""
+    if window_id and len(window_id) > 14:
+        return f"{window_id[:8]}…{window_id[-4:]}"
+    return window_id
+
+
 def write_generation_report(
     config: Config,
     generation: int,
@@ -75,12 +82,15 @@ def format_window_status(
     mismatch: bool,
     population: List[LoadedStrategy],
     trades: List,
+    title: str = "",
 ) -> str:
     """A per-strategy board printed live after each resolved 5-minute window.
 
     Shows what each strategy did this window (traded which side at what price and
     whether it won/lost, or passed/retired) alongside its running bankroll and
     lifetime record — so you can watch the population evolve window by window.
+    The market ``title`` (e.g. "Bitcoin Up or Down - July 22, 7:15AM-7:20AM ET")
+    is shown so the window can be double-checked against Polymarket.
     """
     trades_by = {t.strategy_name: t for t in trades}
     tag = "  [coinbase/official MISMATCH]" if mismatch else ""
@@ -88,9 +98,9 @@ def format_window_status(
     lines: List[str] = []
     lines.append("─" * width)
     lines.append(
-        f"gen {generation} · window {window_num}/{total_windows} · {window_id} "
-        f"· resolved {resolved_side}{tag}"
+        f"gen {generation} · window {window_num}/{total_windows} · resolved {resolved_side}{tag}"
     )
+    lines.append(f"  {title or window_id}   ({_short_id(window_id)})")
     lines.append(
         f"  {'strategy':<20} {'this window':<24} {'bankroll':>9} "
         f"{'life P&L':>9} {'trades':>6} {'hit%':>5} {'gens':>4}"
