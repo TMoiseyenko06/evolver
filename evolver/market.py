@@ -90,7 +90,9 @@ class LiveMarket:
         """Lazily start the WebSocket feeds (once) when enabled and available."""
         if not self.config.use_websocket or not streaming.WEBSOCKET_AVAILABLE:
             return
-        if self._book_stream is None:
+        # The Polymarket CLOB book WS is redundant when books come from Synthesis
+        # (and its server drops the connection every ~30-60s), so skip it there.
+        if self._book_stream is None and not self.config.use_synthesis_market:
             self._book_stream = streaming.OrderBookStream(self.config.pm_ws_url)
             self._book_stream.start()
         if self._spot_stream is None:
