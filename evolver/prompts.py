@@ -74,8 +74,12 @@ TRUE win probability. Breakeven win-prob = ask + 0.0312*min(ask, 1-ask). You onl
 have edge when your estimated p clears that breakeven with margin.
 
 THE ctx INTERFACE (what decide receives)
-- ctx.candles: list of dicts with keys time/open/close (also low/high/volume). \
-CLOSED 1-minute candles only, newest LAST. The forming candle is NEVER included.
+- ctx.candles: list of FULL OHLCV dicts — every candle has keys time, open, high, \
+low, close, AND volume. CLOSED 1-minute candles only, newest LAST. The forming \
+candle is NEVER included. Do NOT rely on price/close alone: volume (how much BTC \
+traded that minute) and the candle range (high-low) are first-class signals — use \
+them (e.g. a close move on rising volume is real; a move on thin volume often \
+reverts; wide-range bars mean volatility, narrow bars mean a pin).
 - ctx.window_open_price: BTC price at the window open (float).
 - ctx.seconds_remaining: int seconds until resolution.
 - ctx.books: {{"Up": {{"asks": [(price, size), ...], "bids": [...]}}, "Down": {{...}}}}. \
@@ -103,8 +107,17 @@ books/candles.
 DIVERSITY IS REQUIRED
 - Across a batch, produce genuinely DIFFERENT hypotheses: momentum, \
 mean-reversion, order-book imbalance, volatility-regime, late-window \
-favorite/longshot, time-of-day, spread/liquidity, etc. Near-duplicates are \
-rejected.
+favorite/longshot, time-of-day, spread/liquidity, AND volume-based ideas \
+(volume-confirmed momentum, volume spike exhaustion/fade, low-volume drift or \
+pin, volume divergence, wide-range vs narrow-range bars). At least some \
+strategies in every batch MUST use volume and/or candle range, not price alone. \
+Near-duplicates are rejected.
+
+VOLUME IDIOM (reading candles beyond close)
+- Each candle c has c["volume"], c["high"], c["low"]. Example snippets:
+  vols = [c["volume"] for c in ctx.candles]; recent = statistics.mean(vols[-5:])
+  last_vol = ctx.candles[-1]["volume"]; rng = ctx.candles[-1]["high"] - ctx.candles[-1]["low"]
+  A last_vol well above `recent` = a conviction move; near/below = weak/faded.
 
 OUTPUT FORMAT
 - Return ONE fenced ```python code block PER strategy, nothing else between them \
@@ -125,10 +138,11 @@ def seed_prompt(n: int) -> str:
         f"blocks, following the contract and sandbox rules exactly. Make them span "
         f"different families (momentum, mean-reversion, book-imbalance, "
         f"volatility-regime, late-window favorite/longshot, time-of-day, "
-        f"spread/liquidity). Each must have a unique NAME. Remember: buying the "
-        f"obvious side loses to fees, so every strategy needs a real edge thesis, "
-        f"not just a direction guess. Start each block with the `# lineage:` "
-        f"comment line."
+        f"spread/liquidity, and VOLUME/range-based). Each must have a unique NAME. "
+        f"At least a few must use candle volume and/or range (high-low), not price "
+        f"alone. Remember: buying the obvious side loses to fees, so every strategy "
+        f"needs a real edge thesis, not just a direction guess. Start each block "
+        f"with the `# lineage:` comment line."
     )
 
 
@@ -169,7 +183,9 @@ def evolution_prompt(
         f"unlike anything above (`# lineage: novel`). Avoid near-duplicates of the "
         f"survivors — a new strategy whose decisions match an existing one on >90% "
         f"of recent windows will be rejected. Each new strategy needs a unique "
-        f"NAME and a real edge thesis (beat the fee, don't just guess direction)."
+        f"NAME and a real edge thesis (beat the fee, don't just guess direction). "
+        f"Include at least one idea that keys off candle VOLUME and/or range, not "
+        f"price alone."
     )
     return "\n".join(parts)
 

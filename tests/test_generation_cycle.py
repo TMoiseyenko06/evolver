@@ -293,3 +293,18 @@ def test_duplicate_is_rejected_and_replaced(tmp_path):
     assert new[0].name == "novel_down"
     # Two OpenRouter calls: the batch + the replacement request.
     assert len(client.calls) == 2
+
+
+def test_system_prompt_emphasizes_volume():
+    from evolver.prompts import SYSTEM_PROMPT, seed_prompt
+
+    assert "volume" in SYSTEM_PROMPT.lower()
+    assert "high" in SYSTEM_PROMPT.lower() and "low" in SYSTEM_PROMPT.lower()
+    assert "volume" in seed_prompt(20).lower()
+
+
+def test_default_population_is_20_keep_10():
+    from evolver.config import Config
+
+    c = Config()
+    assert c.population_size == 20 and c.survivors == 10
