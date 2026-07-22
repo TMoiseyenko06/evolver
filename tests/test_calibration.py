@@ -180,6 +180,39 @@ def test_parse_markets_skips_resolved():
     assert parse_markets(payload, now=now) == []
 
 
+def test_parse_resolution_uses_winner_token_id():
+    from polybot.synthesis import parse_resolution
+
+    payload = {"success": True, "response": {"markets": [{
+        "condition_id": "0xe9b3",
+        "resolved": True,
+        "winner_token_id": "222",
+        "left_outcome": "Up", "left_token_id": "111",
+        "right_outcome": "Down", "right_token_id": "222",
+        "left_price": "0.510", "right_price": "0.500",  # stale mid — must be ignored
+    }]}}
+    assert parse_resolution(payload, "0xe9b3") == "Down"
+
+
+def test_parse_resolution_none_until_resolved():
+    from polybot.synthesis import parse_resolution
+
+    payload = {"response": [{"condition_id": "X", "resolved": False,
+                             "left_outcome": "Up", "left_token_id": "1",
+                             "right_outcome": "Down", "right_token_id": "2"}]}
+    assert parse_resolution(payload, "X") is None
+
+
+def test_parse_resolution_price_fallback():
+    from polybot.synthesis import parse_resolution
+
+    payload = {"response": {"condition_id": "X", "resolved": True,
+                            "left_outcome": "Up", "left_token_id": "1",
+                            "right_outcome": "Down", "right_token_id": "2",
+                            "left_price": "1", "right_price": "0"}}
+    assert parse_resolution(payload, "X") == "Up"
+
+
 def test_parse_orderbook_maps_price_size_dicts():
     from polybot.synthesis import parse_orderbook
 

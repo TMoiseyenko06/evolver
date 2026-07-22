@@ -320,6 +320,18 @@ class LiveMarket:
             return None
 
     def _safe_official(self, condition_id: str) -> Optional[str]:
+        # Synthesis (the trading venue) is the authoritative resolution source;
+        # Gamma is only a fallback when the Synthesis source is disabled.
+        if self.config.use_synthesis_market:
+            try:
+                side = synthesis.parse_resolution(
+                    synthesis.get_market(self._synth_client(), condition_id), condition_id
+                )
+                if side is not None:
+                    return side
+            except Exception:  # noqa: BLE001
+                pass
+            return None  # keep waiting on Synthesis rather than trusting Gamma
         try:
             return pm.official_outcome(condition_id)
         except Exception:  # noqa: BLE001

@@ -326,6 +326,64 @@ def fetch_orderbook(client: "SynthesisClient", token_id: str) -> Any:
     return resp.json()
 
 
+def get_market(client: "SynthesisClient", condition_id: str) -> Any:
+    resp = requests.get(
+        f"{client.base_url}/api/v1/polymarket/market/{condition_id}",
+        headers=client._headers(), timeout=client.timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _market_dicts(item: Any) -> List[dict]:
+    if not isinstance(item, dict):
+        return []
+    if isinstance(item.get("markets"), list):
+        return [m for m in item["markets"] if isinstance(m, dict)]
+    if isinstance(item.get("market"), dict):
+        return [item["market"]]
+    if any(k in item for k in ("left_outcome", "condition_id", "conditionId")):
+        return [item]
+    return []
+
+
+def _extract_market(payload: Any, condition_id: Optional[str] = None) -> Optional[dict]:
+    body = _unwrap(payload)
+    candidates: List[dict] = []
+    for item in (body if isinstance(body, list) else [body]):
+        candidates.extend(_market_dicts(item))
+    for m in candidates:
+        cid = m.get("condition_id") or m.get("conditionId")
+        if condition_id is None or str(cid) == str(condition_id):
+            return m
+    return candidates[0] if candidates else None
+
+
+def parse_resolution(payload: Any, condition_id: Optional[str] = None) -> Optional[str]:
+    """Return the winning side ("Up"/"Down") from a Synthesis market, else None.
+
+    Uses ``resolved`` + ``winner_token_id`` (mapped via left/right token ids),
+    falling back to ``left_price``/``right_price`` hitting ~1.
+    """
+    m = _extract_market(payload, condition_id)
+    if not m or not m.get("resolved"):
+        return None
+    left_out, left_tok = m.get("left_outcome"), str(m.get("left_token_id") or "")
+    right_out, right_tok = m.get("right_outcome"), str(m.get("right_token_id") or "")
+    winner = m.get("winner_token_id")
+    if winner:
+        w = str(winner)
+        if w == left_tok and left_out:
+            return str(left_out)
+        if w == right_tok and right_out:
+            return str(right_out)
+    if _num(m.get("left_price")) >= 0.99 and left_out:
+        return str(left_out)
+    if _num(m.get("right_price")) >= 0.99 and right_out:
+        return str(right_out)
+    return None
+
+
 def parse_markets(payload: Any, now: Optional[dt.datetime] = None,
                   window_seconds: Optional[int] = 300, tol: int = 60) -> List["pm.Window"]:
     """Turn a Synthesis markets response into Bitcoin Up/Down 5-min windows.
