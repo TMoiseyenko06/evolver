@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Protocol
@@ -23,6 +24,8 @@ from polybot import streaming
 
 from .config import Config
 from .models import PollSnapshot
+
+log = logging.getLogger("evolver.market")
 
 
 @dataclass
@@ -229,37 +232,54 @@ class LiveMarket:
 
     # --- resolution ------------------------------------------------------- #
     def resolve(self, handle: WindowHandle) -> Resolution:
-        """Resolve authoritatively from Polymarket's official outcome.
+        """Resolve authoritatively from Polymarket's official outcome, WAITING for it.
 
         These 5-minute markets do NOT reliably match the Coinbase 5m candle
         (settlement uses Polymarket's own price feed/timing), so the official
-        Gamma ``outcomePrices`` result is authoritative and we WAIT for it.
-        The Coinbase candle is kept only as an immediate estimate / fallback if
-        the official outcome never arrives within the timeout.
+        Gamma ``outcomePrices`` result is authoritative. We block until it is
+        available; the Coinbase candle is kept only as a diagnostic. If
+        ``resolution_timeout_seconds`` is set (not None), we give up after it and
+        fall back to the Coinbase estimate, logging the fallback.
         """
         # The window may still be open (a strategy can enter mid-window and we
         # break early); scoring is meaningless until it closes.
         self._wait_until(handle.end)
 
         five_min = self._safe_five_minute(handle.start.timestamp())
-        coinbase_side = None
-        if five_min is not None:
-            coinbase_side = "Up" if five_min["close"] > five_min["open"] else "Down"
+        coinbase_side = self._coinbase_side(five_min)
 
-        # Poll for the authoritative Polymarket outcome.
-        official_side = None
-        deadline = time.monotonic() + self.config.resolution_timeout_seconds
+        cap = self.config.resolution_timeout_seconds  # None => wait indefinitely
+        start = time.monotonic()
+        last_heartbeat = 0.0
+        official_side: Optional[str] = None
         while True:
             official_side = self._safe_official(handle.condition_id)
-            if official_side is not None or time.monotonic() >= deadline:
+            if official_side is not None:
                 break
-            if five_min is None:
+            elapsed = time.monotonic() - start
+            if cap is not None and elapsed >= cap:
+                log.warning(
+                    "official resolution for %s not available after %.0fs; "
+                    "falling back to Coinbase estimate (%s)",
+                    handle.window_id, elapsed, coinbase_side,
+                )
+                break
+            if five_min is None:  # keep the diagnostic fresh while we wait
                 five_min = self._safe_five_minute(handle.start.timestamp())
-                if five_min is not None:
-                    coinbase_side = "Up" if five_min["close"] > five_min["open"] else "Down"
+                coinbase_side = self._coinbase_side(five_min)
+            if elapsed - last_heartbeat >= self.config.resolution_heartbeat_seconds:
+                last_heartbeat = elapsed
+                log.info("waiting for official Polymarket resolution of %s (%.0fs elapsed)…",
+                         handle.window_id, elapsed)
             time.sleep(self.config.resolution_poll_seconds)
 
         return Resolution(coinbase_side=coinbase_side, official_side=official_side, five_min_candle=five_min)
+
+    @staticmethod
+    def _coinbase_side(five_min: Optional[dict]) -> Optional[str]:
+        if five_min is None:
+            return None
+        return "Up" if five_min["close"] > five_min["open"] else "Down"
 
     def _safe_five_minute(self, start_ts: float) -> Optional[dict]:
         try:

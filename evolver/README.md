@@ -148,12 +148,13 @@ markdown report in `runs/gen{G}_report.md` is still written regardless.
 - **Live feed is WebSocket-first** (see below): during `run`, order books and spot
   stream in real time; REST is the fallback and the source for closed candles.
 - **Resolution** is authoritative from Polymarket's **official** Gamma
-  `outcomePrices` — the loop **waits** for it (up to `resolution_timeout_seconds`).
-  These 5-minute markets do **not** reliably match the Coinbase 5m candle, so the
-  Coinbase score (`close > open` → Up, tie → Down) is only an immediate estimate /
-  fallback used if the official outcome never arrives. Any Coinbase-vs-official
-  mismatch is flagged/logged and trades are scored to the official side. This
-  same resolution drives both the paper `run` scoring and `calibrate`.
+  `outcomePrices`, and the loop **blocks until it is available** (default
+  `resolution_timeout_seconds=None` = wait indefinitely, with a heartbeat log; set
+  a number to cap the wait). These 5-minute markets do **not** reliably match the
+  Coinbase 5m candle, which is kept only as a diagnostic and used as a fallback
+  *only* if a finite timeout is set and elapses. Any Coinbase-vs-official mismatch
+  is flagged/logged. This same resolution drives both the paper `run` scoring and
+  `calibrate`, so strategies are always evaluated on real settlement.
 
 ---
 

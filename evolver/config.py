@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import FrozenSet
+from typing import FrozenSet, Optional
 
 
 @dataclass
@@ -58,11 +58,13 @@ class Config:
 
     # --- market ---
     product: str = "BTC-USD"
-    # Resolution: the official Polymarket outcome is authoritative; wait for it
-    # (these 5-min markets do NOT reliably match the Coinbase 5m candle, which is
-    # only an immediate estimate/fallback).
-    resolution_timeout_seconds: float = 180.0
+    # Resolution: the official Polymarket outcome is authoritative and we WAIT for
+    # it (these 5-min markets do NOT reliably match the Coinbase 5m candle, which
+    # is only a diagnostic). `resolution_timeout_seconds=None` waits indefinitely;
+    # set a number to cap the wait and fall back to the Coinbase estimate after it.
+    resolution_timeout_seconds: Optional[float] = None
     resolution_poll_seconds: float = 10.0
+    resolution_heartbeat_seconds: float = 60.0
 
     # --- live order execution (Synthesis) — used only by `calibrate` ---
     synthesis_api_key: str = field(default_factory=lambda: os.environ.get("SYNTHESIS_API_KEY", ""))
