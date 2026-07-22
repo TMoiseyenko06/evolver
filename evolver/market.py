@@ -68,6 +68,9 @@ class LiveMarket:
         self.config = config
         self._book_stream: streaming.OrderBookStream = None
         self._spot_stream: streaming.SpotStream = None
+        # Windows already handed out, so we never return the same market twice
+        # (one trade per distinct 5-minute window).
+        self._returned_windows: set = set()
 
     def _ensure_streams(self) -> None:
         """Lazily start the WebSocket feeds (once) when enabled and available."""
@@ -89,21 +92,29 @@ class LiveMarket:
         self._spot_stream = None
 
     # --- discovery -------------------------------------------------------- #
-    def next_window(self) -> WindowHandle:
-        """Block until an active/upcoming Bitcoin Up/Down window is available.
+    def _next_unreturned(self, windows: List[pm.Window], now: dt.datetime):
+        """Earliest not-yet-in-the-past window we have not returned before."""
+        fresh = [
+            w for w in windows
+            if w.end > now.astimezone(w.end.tzinfo) and w.window_id not in self._returned_windows
+        ]
+        fresh.sort(key=lambda w: w.start)
+        return fresh[0] if fresh else None
 
-        Retries discovery (Gamma listings can be late) until a window whose end
-        is still in the future is found; waits out any gap before its start.
+    def next_window(self) -> WindowHandle:
+        """Block until a NEW active/upcoming Bitcoin Up/Down window is available.
+
+        Retries discovery (Gamma listings can be late). A window is returned at
+        most once, so the caller trades each distinct 5-minute market only once
+        (never re-entering the same still-open window repeatedly).
         """
         while True:
             now = dt.datetime.now(dt.timezone.utc)
-            windows = self._safe_discover(now)
-            upcoming = [w for w in windows if w.end > now.astimezone(w.end.tzinfo)]
-            upcoming.sort(key=lambda w: w.start)
-            if upcoming:
-                w = upcoming[0]
+            w = self._next_unreturned(self._safe_discover(now), now)
+            if w is not None:
                 token_map = self._safe_token_map(w.condition_id)
                 if token_map.get("Up") and token_map.get("Down"):
+                    self._returned_windows.add(w.window_id)
                     handle = WindowHandle(
                         window_id=w.window_id,
                         condition_id=w.condition_id,
