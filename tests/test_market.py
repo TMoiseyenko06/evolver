@@ -67,6 +67,19 @@ def test_official_outcome_none_until_resolved(monkeypatch):
     assert pm.official_outcome("X") is None
 
 
+def test_discover_windows_keeps_only_5min(monkeypatch):
+    import polybot.polymarket as pm
+
+    now = dt.datetime(2026, 7, 22, 12, 0, tzinfo=dt.timezone.utc)  # 8:00 AM EDT
+    rows = [
+        {"conditionId": "FIVE", "question": "Bitcoin Up or Down - July 22, 8:00AM-8:05AM ET"},
+        {"conditionId": "FIFTEEN", "question": "Bitcoin Up or Down - July 22, 8:00AM-8:15AM ET"},
+    ]
+    monkeypatch.setattr(pm, "_get", lambda *a, **k: rows)
+    ids = [w.condition_id for w in pm.discover_windows(now)]
+    assert "FIVE" in ids and "FIFTEEN" not in ids
+
+
 def test_find_market_filters_by_condition_id():
     import polybot.polymarket as pm
 

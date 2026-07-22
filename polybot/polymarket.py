@@ -124,9 +124,15 @@ def discover_windows(
     now: Optional[dt.datetime] = None,
     limit: int = 100,
     slug_contains: str = "bitcoin-up-or-down",
+    window_seconds: Optional[int] = 300,
+    duration_tolerance_seconds: int = 60,
 ) -> List[Window]:
-    """Discover live/upcoming Bitcoin Up/Down 5-minute markets.
+    """Discover live/upcoming Bitcoin Up/Down markets of the wanted duration.
 
+    Polymarket lists "Bitcoin Up or Down" markets in several cadences (5-min,
+    15-min, hourly …). ``window_seconds`` keeps only markets whose parsed
+    start→end span matches (default 300s = 5 minutes), so we never trade a
+    15-minute market by mistake. Pass ``window_seconds=None`` to keep all.
     Uses ``end_date_min=now`` so Gamma does not return stale markets.
     """
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -151,6 +157,10 @@ def discover_windows(
         if not parsed:
             continue
         start, end = parsed
+        if window_seconds is not None:
+            duration = (end - start).total_seconds()
+            if abs(duration - window_seconds) > duration_tolerance_seconds:
+                continue  # wrong cadence (e.g. a 15-minute market)
         cond = row.get("conditionId") or row.get("condition_id")
         if not cond:
             continue

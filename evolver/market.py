@@ -136,7 +136,7 @@ class LiveMarket:
 
     def _safe_discover(self, now) -> List[pm.Window]:
         try:
-            return pm.discover_windows(now)
+            return pm.discover_windows(now, window_seconds=self.config.window_seconds)
         except Exception:  # noqa: BLE001 — transient network, retry
             return []
 
