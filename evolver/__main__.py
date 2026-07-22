@@ -12,10 +12,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import shutil
 import sys
 
 from . import calibrate as calib
+from . import tune as tuner
 from .config import Config
 from .env import find_dotenv, load_dotenv
 from .execution import build_synthesis_executor
@@ -226,6 +228,78 @@ def cmd_synthesis_markets(config: Config, args) -> int:
     return 0
 
 
+def cmd_tune(config: Config, args) -> int:
+    """Fine-tune ONE strategy's numeric parameters via evolutionary search."""
+    import random
+
+    # --- resolve the template + parameter ranges + a label ---
+    if args.template:
+        if not args.params:
+            print("ERROR: --template requires --params (a JSON file of ranges).", file=sys.stderr)
+            return 2
+        template = open(args.template).read()
+        specs = tuner.parse_param_spec(json.load(open(args.params)))
+        base_label = os.path.splitext(os.path.basename(args.template))[0]
+    else:
+        if args.strategy_file:
+            base_source = open(args.strategy_file).read()
+            base_label = os.path.splitext(os.path.basename(args.strategy_file))[0]
+        elif args.strategy:
+            base_store = Store(config)
+            row = base_store.get_strategy_row(args.strategy)
+            base_store.close()
+            if row is None:
+                print(f"No strategy named '{args.strategy}' in the current run.", file=sys.stderr)
+                return 1
+            base_source, base_label = row["source"], args.strategy
+        else:
+            print("ERROR: give --strategy NAME, --strategy-file F, or --template T --params P.",
+                  file=sys.stderr)
+            return 2
+        if not config.openrouter_api_key:
+            print("ERROR: OPENROUTER_API_KEY needed to auto-parameterize "
+                  "(or supply --template/--params).", file=sys.stderr)
+            return 2
+        client = OpenRouterClient(api_key=config.openrouter_api_key, model=config.model,
+                                  base_url=config.openrouter_base_url)
+        try:
+            template, specs = tuner.parameterize(client, base_source)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR parameterizing strategy: {exc}", file=sys.stderr)
+            return 1
+
+    # --- isolate tuning state in its own subdir ---
+    config.data_dir = config.data_dir / f"tune_{base_label}"
+    store = Store(config)
+    (config.data_dir / "template.py").write_text(template, encoding="utf-8")
+    (config.data_dir / "params.json").write_text(json.dumps(
+        {s.name: {"min": s.lo, "max": s.hi, "type": "int" if s.is_int else "float",
+                  "default": s.default} for s in specs}, indent=2), encoding="utf-8")
+
+    print(f"Tuning '{base_label}': {len(specs)} params · {args.variants} variants · keep {args.keep}")
+    for s in specs:
+        print(f"  {s.name}: [{s.lo}, {s.hi}]{' int' if s.is_int else ''}")
+
+    market = LiveMarket(config)
+
+    def _on_gen(gen, population, survivors):
+        best = max(population, key=lambda s: s.gen.net_pnl)
+        print(f"\n=== tune gen {gen}: best net ${best.gen.net_pnl:+.2f} "
+              f"({best.gen.hit_pct*100:.0f}% / {best.gen.trades} trades) "
+              f"params {getattr(best, 'params', {})} ===\n", flush=True)
+
+    try:
+        tuner.run_tuning(base_label, template, specs, market, store, config,
+                         args.variants, args.keep, args.generations,
+                         rng=random.Random(), on_generation=_on_gen)
+    except KeyboardInterrupt:
+        print("\nInterrupted — tuning state persisted.")
+    finally:
+        market.close()
+        store.close()
+    return 0
+
+
 def cmd_reset(config: Config, args) -> int:
     if not args.yes:
         print("Refusing to reset without --yes.", file=sys.stderr)
@@ -279,6 +353,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("synthesis-markets",
                    help="list the 5-min Bitcoin Up/Down markets Synthesis is showing"
                    ).set_defaults(func=cmd_synthesis_markets)
+
+    p_tune = sub.add_parser("tune", help="fine-tune ONE strategy's numeric parameters")
+    p_tune.add_argument("--strategy", help="base strategy name from the current run's DB")
+    p_tune.add_argument("--strategy-file", help="base strategy .py file")
+    p_tune.add_argument("--template", help="manual template .py with {{param}} placeholders")
+    p_tune.add_argument("--params", help="JSON file of param ranges (used with --template)")
+    p_tune.add_argument("--variants", type=int, default=30, help="population size per generation")
+    p_tune.add_argument("--keep", type=int, default=10, help="top K variants kept each generation")
+    p_tune.add_argument("--generations", type=int, default=None, help="stop after N (default: forever)")
+    p_tune.set_defaults(func=cmd_tune)
 
     p_reset = sub.add_parser("reset", help="wipe all evolver state")
     p_reset.add_argument("--yes", action="store_true", help="confirm destructive reset")

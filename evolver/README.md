@@ -10,6 +10,7 @@ python -m evolver run          # the eternal loop
 python -m evolver leaderboard  # lifetime rankings, generations survived
 python -m evolver show NAME     # a strategy's code, lineage, full stat history
 python -m evolver replay NAME   # re-score a strategy against archived windows
+python -m evolver tune --strategy NAME   # fine-tune ONE strategy's parameters
 python -m evolver calibrate --yes  # place real $-stake orders vs paper (Synthesis)
 python -m evolver synthesis-markets  # list the 5-min markets Synthesis is showing
 python -m evolver reset --yes   # wipe db + runs/ + strategies/  (add --keep-strategies to keep them)
@@ -191,6 +192,34 @@ it's effectively optional — installing it just cuts latency.
 Polls fire at a **constant, drift-free cadence** (anchored to `open + k·poll_interval`
 on a monotonic clock), with one guaranteed final poll `final_poll_lead_seconds`
 before close so late-window strategies still act in the closing seconds.
+
+---
+
+## Parameter fine-tuning (`tune`)
+
+The main loop searches over strategy *structures* (LLM-written logic), which is
+noisy. `tune` instead fixes one strategy's logic and searches over its numeric
+*parameters* — a continuous space that converges much faster on 50-window samples.
+
+```bash
+python -m evolver tune --strategy open_reversion_early --variants 30 --keep 10
+# or from a file, or a manual template:
+python -m evolver tune --strategy-file examples/foo.py
+python -m evolver tune --template t.py --params ranges.json   # no LLM
+```
+
+- **Parameterize:** one OpenRouter call turns the strategy into a template with
+  `{{param}}` placeholders + ranges (`min/max/type`), e.g. `ask_cap ∈ [0.30,0.55]`,
+  `enter_after ∈ [30,170]`. (Or supply `--template`/`--params` yourself — no LLM.)
+- **Search:** the population is N variants of the *same* logic with different
+  parameter sets. Gen 1 samples the space; gen 2+ keeps the top K by net P&L and
+  breeds the rest by nudging survivors' params (small Gaussian steps) plus a little
+  fresh exploration. Pure numeric mutation — **no LLM after setup**.
+- **Forward-test** all N over the same 50 windows via the normal engine (shared
+  candles/books/Synthesis resolution, background overlap), rank, mutate, repeat.
+- Runs in its own `tune_{name}/` data dir (never mixes with the main run); the
+  template + ranges are saved, and each generation writes `runs/tune_{name}_gen{G}.md`
+  with the ranked variants and best parameters. `--generations N` to bound it.
 
 ---
 
