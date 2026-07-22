@@ -229,19 +229,36 @@ class LiveMarket:
 
     # --- resolution ------------------------------------------------------- #
     def resolve(self, handle: WindowHandle) -> Resolution:
-        """Score immediately from the Coinbase 5m candle, then reconcile with Gamma."""
-        start_ts = handle.start.timestamp()
-        five_min = None
-        # Wait briefly for the 5m candle to close, then fetch it.
-        for _ in range(6):
-            five_min = self._safe_five_minute(start_ts)
-            if five_min is not None:
-                break
-            time.sleep(5)
+        """Resolve authoritatively from Polymarket's official outcome.
+
+        These 5-minute markets do NOT reliably match the Coinbase 5m candle
+        (settlement uses Polymarket's own price feed/timing), so the official
+        Gamma ``outcomePrices`` result is authoritative and we WAIT for it.
+        The Coinbase candle is kept only as an immediate estimate / fallback if
+        the official outcome never arrives within the timeout.
+        """
+        # The window may still be open (a strategy can enter mid-window and we
+        # break early); scoring is meaningless until it closes.
+        self._wait_until(handle.end)
+
+        five_min = self._safe_five_minute(handle.start.timestamp())
         coinbase_side = None
         if five_min is not None:
             coinbase_side = "Up" if five_min["close"] > five_min["open"] else "Down"
-        official_side = self._safe_official(handle.condition_id)
+
+        # Poll for the authoritative Polymarket outcome.
+        official_side = None
+        deadline = time.monotonic() + self.config.resolution_timeout_seconds
+        while True:
+            official_side = self._safe_official(handle.condition_id)
+            if official_side is not None or time.monotonic() >= deadline:
+                break
+            if five_min is None:
+                five_min = self._safe_five_minute(handle.start.timestamp())
+                if five_min is not None:
+                    coinbase_side = "Up" if five_min["close"] > five_min["open"] else "Down"
+            time.sleep(self.config.resolution_poll_seconds)
+
         return Resolution(coinbase_side=coinbase_side, official_side=official_side, five_min_candle=five_min)
 
     def _safe_five_minute(self, start_ts: float) -> Optional[dict]:

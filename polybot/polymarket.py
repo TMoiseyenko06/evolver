@@ -192,12 +192,14 @@ def official_outcome(condition_id: str) -> Optional[str]:
     """Return the official winning side ("Up"/"Down") from Gamma outcomePrices.
 
     ``outcomePrices`` is a JSON array of "1"/"0" strings parallel to
-    ``outcomes``. Returns None if the market has not resolved yet.
+    ``outcomes``. Returns None if the market has not resolved yet. Robust to the
+    query param being ignored (filters returned rows by conditionId) and to
+    response wrappers.
     """
     rows = _get(f"{GAMMA_BASE}/markets", params={"condition_ids": condition_id})
-    if not rows:
+    row = _find_market(rows, condition_id)
+    if row is None:
         return None
-    row = rows[0] if isinstance(rows, list) else rows
     outcomes = _maybe_json(row.get("outcomes"))
     prices = _maybe_json(row.get("outcomePrices"))
     if not outcomes or not prices or len(outcomes) != len(prices):
@@ -209,6 +211,22 @@ def official_outcome(condition_id: str) -> Optional[str]:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _find_market(rows: Any, condition_id: str) -> Optional[dict]:
+    """Pick the market row matching ``condition_id`` from a Gamma response."""
+    if isinstance(rows, dict):
+        rows = rows.get("data") or rows.get("markets") or [rows]
+    if not isinstance(rows, list):
+        return None
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        cid = r.get("conditionId") or r.get("condition_id")
+        if cid == condition_id:
+            return r
+    # If the API ignored the filter but returned exactly one market, trust it.
+    return rows[0] if len(rows) == 1 and isinstance(rows[0], dict) else None
 
 
 def _maybe_json(value: Any) -> Any:

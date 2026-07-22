@@ -58,6 +58,11 @@ class Config:
 
     # --- market ---
     product: str = "BTC-USD"
+    # Resolution: the official Polymarket outcome is authoritative; wait for it
+    # (these 5-min markets do NOT reliably match the Coinbase 5m candle, which is
+    # only an immediate estimate/fallback).
+    resolution_timeout_seconds: float = 180.0
+    resolution_poll_seconds: float = 10.0
 
     # --- live order execution (Synthesis) — used only by `calibrate` ---
     synthesis_api_key: str = field(default_factory=lambda: os.environ.get("SYNTHESIS_API_KEY", ""))
