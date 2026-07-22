@@ -68,6 +68,37 @@ def test_overlap_fetches_next_window_before_prior_resolves(tmp_path):
     assert strat.bankroll != cfg.starting_bankroll
 
 
+class SlowFirstMarket(MockMarket):
+    """First window resolves slowly; the rest are fast."""
+
+    def __init__(self, specs, events, lock):
+        super().__init__(specs)
+        self._events = events
+        self._elock = lock
+
+    def resolve(self, handle):
+        time.sleep(0.5 if handle.window_id == "win_up_1" else 0.05)
+        with self._elock:
+            self._events.append(handle.window_id)
+        return super().resolve(handle)
+
+
+def test_slow_market_does_not_block_the_others(tmp_path):
+    cfg = make_config(tmp_path, population_size=1, survivors=1, windows_per_generation=4)
+    cfg.overlap_resolution = True
+    cfg.live_window_reports = False
+    cfg.resolution_workers = 4
+    store = Store(cfg)
+    pop = [LoadedStrategy.create(strategy_source("probe", BODY_ALWAYS_UP), 1, cfg)]
+    events, lock = [], threading.Lock()
+    run_generation(pop, SlowFirstMarket(default_window_specs(), events, lock), store, cfg, 1)
+
+    # The slow window (win_up_1) must NOT be the first to finish resolving —
+    # the pool resolved the fast ones while it waited (no head-of-line block).
+    assert events[0] != "win_up_1"
+    assert store.conn.execute("SELECT COUNT(*) c FROM windows").fetchone()["c"] == 4
+
+
 def test_sequential_mode_waits_for_each_resolution(tmp_path):
     cfg, store, strat, events = _run(tmp_path, overlap=False)
 

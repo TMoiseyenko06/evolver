@@ -65,9 +65,15 @@ class Config:
     # it (these 5-min markets do NOT reliably match the Coinbase 5m candle, which
     # is only a diagnostic). `resolution_timeout_seconds=None` waits indefinitely;
     # set a number to cap the wait and fall back to the Coinbase estimate after it.
-    resolution_timeout_seconds: Optional[float] = None
+    # Wait this long for the official outcome, then fall back to the Coinbase
+    # estimate so one never-resolving market can't freeze the run. Normal
+    # settlement is seconds-to-minutes, so this only fires on genuinely stuck
+    # markets. Set to None to wait indefinitely.
+    resolution_timeout_seconds: Optional[float] = 1200.0
     resolution_poll_seconds: float = 10.0
     resolution_heartbeat_seconds: float = 60.0
+    # Resolve windows concurrently so a slow/stuck market doesn't block the rest.
+    resolution_workers: int = 6
 
     # --- live order execution (Synthesis) — used only by `calibrate` ---
     synthesis_api_key: str = field(default_factory=lambda: os.environ.get("SYNTHESIS_API_KEY", ""))

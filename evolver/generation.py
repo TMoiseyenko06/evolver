@@ -183,8 +183,14 @@ class _ResolutionPipeline:
         self._q: "queue.Queue" = queue.Queue()
         self._count_lock = threading.Lock()
         self.resolved_count = 0
-        self._thread = threading.Thread(target=self._run, name="resolver", daemon=True)
-        self._thread.start()
+        # A POOL of workers so one slow/stuck market only ties up one thread while
+        # the others keep resolving later windows (no head-of-line blocking).
+        n = max(1, getattr(config, "resolution_workers", 1))
+        self._threads = [
+            threading.Thread(target=self._run, name=f"resolver-{i}", daemon=True) for i in range(n)
+        ]
+        for t in self._threads:
+            t.start()
 
     def submit(self, item) -> None:
         self._q.put(item)
@@ -225,8 +231,10 @@ class _ResolutionPipeline:
         self._q.join()
 
     def stop(self) -> None:
-        self._q.put(None)
-        self._thread.join(timeout=5)
+        for _ in self._threads:
+            self._q.put(None)
+        for t in self._threads:
+            t.join(timeout=5)
 
 
 def run_generation(
