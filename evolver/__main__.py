@@ -53,6 +53,8 @@ def _add_file_logging(config: Config) -> None:
 
 
 def cmd_run(config: Config, args) -> int:
+    if getattr(args, "windows", None):
+        config.windows_per_generation = args.windows
     if not config.openrouter_api_key:
         print(
             "ERROR: OPENROUTER_API_KEY is not set. Put it in a .env file "
@@ -344,6 +346,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="run the eternal evolution loop")
     p_run.add_argument("--generations", type=int, default=None,
                        help="stop after N generations (default: run forever)")
+    p_run.add_argument("--windows", type=int, default=None,
+                       help="windows per generation (default: %d)" % Config.windows_per_generation)
     p_run.set_defaults(func=cmd_run)
 
     sub.add_parser("leaderboard", help="lifetime rankings").set_defaults(func=cmd_leaderboard)

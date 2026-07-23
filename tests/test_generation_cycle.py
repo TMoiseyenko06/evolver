@@ -261,6 +261,26 @@ def test_agreement_and_duplicate_detection(tmp_path):
     assert agreement(up_a, down) == 0.0  # opposite decisions
 
 
+def test_agreement_ignores_mutual_pass_windows():
+    # Two strategies that both pass a window aren't duplicates for it — only the
+    # windows where at least one TRADES count. This catches thematic clones that
+    # trade the same handful of windows the same way but pass most others.
+    a = ["Up", None, None, "Down", None]
+    b = ["Up", None, None, "Down", None]
+    # Only 2 active windows (indices 0 and 3), both agree -> 1.0, not diluted by
+    # the three mutual-pass windows.
+    assert agreement(a, b) == 1.0
+
+    c = ["Up", None, "Up", None]
+    d = [None, None, "Down", None]
+    # Active windows: index 0 (Up vs pass -> differ) and index 2 (Up vs Down ->
+    # differ). 0/2 agree.
+    assert agreement(c, d) == 0.0
+
+    # All mutual passes -> no active windows -> 0.0 (not a duplicate).
+    assert agreement([None, None], [None, None]) == 0.0
+
+
 def test_duplicate_is_rejected_and_replaced(tmp_path):
     cfg = make_config(tmp_path, population_size=2, survivors=1)
     cfg.duplicate_threshold = 0.9

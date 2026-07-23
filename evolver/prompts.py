@@ -177,17 +177,52 @@ def evolution_prompt(
         parts.append(_stat_line(s))
         parts.append(f"failure_analysis: {failure_analysis(s)}")
         parts.append(f"```python\n{s.source.strip()}\n```")
+    parts.append("\n" + _diversity_directive(survivors))
     parts.append(
         f"\nProduce a MIX: some mutations/combinations of the survivors (set "
         f"`# lineage:` to the parent NAME(s)) and some genuinely NOVEL approaches "
         f"unlike anything above (`# lineage: novel`). Avoid near-duplicates of the "
-        f"survivors — a new strategy whose decisions match an existing one on >90% "
-        f"of recent windows will be rejected. Each new strategy needs a unique "
-        f"NAME and a real edge thesis (beat the fee, don't just guess direction). "
-        f"Include at least one idea that keys off candle VOLUME and/or range, not "
-        f"price alone."
+        f"survivors — a new strategy whose TRADES match an existing one on >85% "
+        f"of the windows it acts on will be rejected. Each new strategy needs a "
+        f"unique NAME and a real edge thesis (beat the fee, don't just guess "
+        f"direction). Include at least one idea that keys off candle VOLUME and/or "
+        f"range, not price alone."
     )
     return "\n".join(parts)
+
+
+# Family keywords for detecting population concentration.
+_REVERSION_KW = ("revert", "reversion", "fade", "pin", "reversal", "overshoot",
+                 "exhaust", "pullback", "mean")
+_MOMENTUM_KW = ("momentum", "trend", "breakout", "continue", "accel", "burst", "follow")
+
+
+def _diversity_directive(survivors: List[LoadedStrategy]) -> str:
+    """Warn the model when survivors over-concentrate in one family (esp. reversion).
+
+    A monoculture of mean-reversion strategies gets wiped out together the moment
+    the market trends, so when survivors skew that way, demand non-reversion families.
+    """
+    if not survivors:
+        return ""
+    def _is(s, kws):
+        text = (s.name + " " + (s.description or "")).lower()
+        return any(k in text for k in kws)
+    rev = sum(1 for s in survivors if _is(s, _REVERSION_KW))
+    mom = sum(1 for s in survivors if _is(s, _MOMENTUM_KW))
+    note = [f"POPULATION MIX: {rev}/{len(survivors)} survivors are mean-reversion/fade "
+            f"style, {mom}/{len(survivors)} are momentum/trend."]
+    if rev >= max(2, (len(survivors) + 1) // 2):
+        note.append(
+            "WARNING: the population is OVER-CONCENTRATED in mean-reversion/fade — a "
+            "single trending session wipes them ALL out at once (this is happening). "
+            "Do NOT breed more reversion/fade/pin strategies. The MAJORITY of your new "
+            "strategies MUST be OTHER families: momentum / trend-continuation, order-book "
+            "pressure/imbalance, breakout/expansion, and time-of-day. The population must "
+            "survive BOTH trending and ranging markets — deliberately add strategies that "
+            "PROFIT when price keeps moving (the opposite of the current survivors)."
+        )
+    return "\n".join(note)
 
 
 def failure_analysis(s: LoadedStrategy) -> str:

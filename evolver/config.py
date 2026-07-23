@@ -54,7 +54,7 @@ class Config:
     allowed_imports: FrozenSet[str] = frozenset({"math", "statistics"})
 
     # --- diversity ---
-    duplicate_threshold: float = 0.90  # reject a new strategy >90% identical
+    duplicate_threshold: float = 0.85  # reject a new strategy whose TRADES are >85% identical
     diversity_lookback_windows: int = 50
     max_repair_attempts: int = 1
     max_diversity_retries: int = 2

@@ -295,8 +295,17 @@ the one command that touches real funds.
   pass (logged). Bankroll is updated at resolution (`+= net_pnl`).
 - **Diversity**: a new strategy's per-window action vector is compared to existing
   ones over the last 50 archived windows; if it agrees on `> duplicate_threshold`
-  (default 90%), it's rejected and a replacement is requested once. Skipped on the
-  first generation (no archive yet).
+  (default 85%), it's rejected and a replacement is requested once. Skipped on the
+  first generation (no archive yet). Agreement is measured **only over windows
+  where at least one of the two strategies trades** — two strategies that both
+  pass a window aren't "agreeing" — so thematic clones that fade the same handful
+  of moves are caught even if they pass most windows.
+- **Monoculture guard**: the evolution prompt inspects the survivors and, when
+  they over-concentrate in one family (e.g. a majority of mean-reversion/fade
+  strategies — which all lose together the moment the market trends), it demands
+  the majority of the next batch come from *other* families (momentum /
+  trend-continuation, book-pressure, breakout, time-of-day) so the population
+  survives both trending and ranging regimes.
 - **Lineage convention**: each generated block starts with `# lineage: novel` or
   `# lineage: parent_a, parent_b`, parsed into the strategy's lineage.
 - **Auto-retired / failed strategies always sink below survivors** regardless of
@@ -322,9 +331,18 @@ it in. Real environment variables take precedence over `.env` values.
 | `EVOLVER_DATA_DIR` | where `evolver.sqlite`, `runs/`, `strategies/` live (default `.`) |
 
 ```bash
-cp .env.example .env      # then edit OPENROUTER_API_KEY
-python -m evolver run
+cp .env.example .env         # then edit OPENROUTER_API_KEY
+python -m evolver run                 # 50 windows/generation (default)
+python -m evolver run --windows 25    # shorter generations, faster turnover
+python -m evolver run --generations 3 # stop after 3 generations
 ```
+
+Each generation forward-tests the population over `--windows` resolved 5-minute
+windows (default **50**). 50 is a deliberate trade-off — small enough that a
+single generation's winner is often luck (hence lifetime stats and
+generations-survived drive the leaderboard, not the per-gen cull), but large
+enough to separate signal from noise. Drop it to 25 for faster iteration when
+you're experimenting; keep 50 for the real run.
 
 All numeric knobs (population size, windows/generation, stake, bankroll, timeout,
 thresholds) live in `evolver/config.py`, including the live-feed settings:

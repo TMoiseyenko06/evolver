@@ -46,12 +46,20 @@ def action_vector(source: str, windows: List[WindowData], config: Config) -> Lis
 
 
 def agreement(a: List[Optional[str]], b: List[Optional[str]]) -> float:
-    """Fraction of windows where two action vectors agree (1.0 == identical)."""
+    """Fraction of *active* windows where two action vectors agree (1.0 identical).
+
+    Windows where BOTH strategies passed are ignored — two strategies aren't
+    duplicates just because they're both quiet; they're duplicates when they
+    TRADE the same windows the same way. This catches thematic clones (e.g. many
+    reversion strategies that all fade the same moves) that a pass-inclusive
+    metric would miss.
+    """
     n = min(len(a), len(b))
-    if n == 0:
+    pairs = [(a[i], b[i]) for i in range(n) if not (a[i] is None and b[i] is None)]
+    if not pairs:
         return 0.0
-    same = sum(1 for i in range(n) if a[i] == b[i])
-    return same / n
+    same = sum(1 for x, y in pairs if x == y)
+    return same / len(pairs)
 
 
 @dataclass
