@@ -38,6 +38,20 @@ def _setup_logging() -> None:
     )
 
 
+def _add_file_logging(config: Config) -> None:
+    """Also write all logs (evolver + polybot) to <data_dir>/evolver.log."""
+    try:
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+        path = config.data_dir / "evolver.log"
+        fh = logging.FileHandler(path, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        fh.setLevel(logging.INFO)
+        logging.getLogger().addHandler(fh)
+        logging.getLogger("evolver").info("logging to %s", path)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("evolver").warning("could not open log file: %s", exc)
+
+
 def cmd_run(config: Config, args) -> int:
     if not config.openrouter_api_key:
         print(
@@ -384,6 +398,7 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = Config()
+    _add_file_logging(config)
     return args.func(config, args)
 
 

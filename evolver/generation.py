@@ -168,6 +168,8 @@ def _resolve_and_record(strategies, market, store, config, generation, seq, hand
             "resolution mismatch on %s: coinbase=%s official=%s (trades scored to official)",
             handle.window_id, resolution.coinbase_side, resolution.official_side,
         )
+    log.info("window %s (%s) resolved %s — %d trade(s) this window",
+             handle.window_id, handle.title, resolved, len(trades))
     return True, trades, resolved, mismatch
 
 

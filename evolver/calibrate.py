@@ -122,18 +122,31 @@ def run_calibration(
             consecutive_failures = 0
             order = getattr(real_executor, "last_order", None)
             entry = (side, token_id, paper_fill, real_fill, order)
+            log.info(
+                "REAL ORDER filled: %s | %s $%.2f -> %.4f shares @ %.3f, fee %.4f, "
+                "status=%s id=%s | %s",
+                handle.title, side, config.live_stake, real_fill.shares, real_fill.avg_price,
+                real_fill.fee, getattr(order, "status", ""), getattr(order, "order_id", ""),
+                handle.window_id,
+            )
+            log.debug("raw order response: %s", json.dumps(getattr(order, "raw", {})))
             break
 
         if entry is None:
             continue  # strategy passed this window — don't wait for its resolution
         resolution = market.resolve(handle)
         resolved = resolution.official_side or resolution.coinbase_side
+        log.info("window %s resolved %s (coinbase=%s official=%s)", handle.window_id,
+                 resolved, resolution.coinbase_side, resolution.official_side)
         if resolved is None:
             continue
 
         side, token_id, paper_fill, real_fill, order = entry
         paper_res = score_trade(driver.name, handle.window_id, paper_fill, resolved)
         real_res = score_trade(driver.name, handle.window_id, real_fill, resolved)
+        log.info("calibrated trade #%d: %s->%s | paper pnl %+.3f / real pnl %+.3f | real %s",
+                 seq + 1, side, resolved, paper_res.net_pnl, real_res.net_pnl,
+                 "WIN" if real_res.won else "LOSS")
 
         rec = {
             "seq": seq,
