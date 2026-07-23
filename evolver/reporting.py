@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from . import colors as c
 from .config import Config
 from .strategy import LoadedStrategy
 
@@ -93,31 +94,36 @@ def format_window_status(
     is shown so the window can be double-checked against Polymarket.
     """
     trades_by = {t.strategy_name: t for t in trades}
-    tag = "  [coinbase/official MISMATCH]" if mismatch else ""
+    tag = c.yellow("  [coinbase/official MISMATCH]") if mismatch else ""
     width = 78
     lines: List[str] = []
-    lines.append("─" * width)
+    lines.append(c.dim("─" * width))
     lines.append(
-        f"gen {generation} · window {window_num}/{total_windows} · resolved {resolved_side}{tag}"
+        c.bold(f"gen {generation} · window {window_num}/{total_windows} · resolved ")
+        + c.bold(c.cyan(resolved_side)) + tag
     )
-    lines.append(f"  {title or window_id}   ({_short_id(window_id)})")
-    lines.append(
+    lines.append(f"  {c.bold(title or window_id)}   {c.dim('(' + _short_id(window_id) + ')')}")
+    lines.append(c.dim(
         f"  {'strategy':<20} {'this window':<24} {'bankroll':>9} "
         f"{'life P&L':>9} {'trades':>6} {'hit%':>5} {'gens':>4}"
-    )
+    ))
     for s in sorted(population, key=lambda st: st.bankroll, reverse=True):
         t = trades_by.get(s.name)
         if t is not None:
-            outcome = "WIN " if t.won else "LOSS"
-            this = f"{t.fill.side}@{t.fill.avg_price:.2f} {outcome} {t.net_pnl:+7.2f}"
+            outcome = c.green("WIN ") if t.won else c.red("LOSS")
+            plain = f"{t.fill.side}@{t.fill.avg_price:.2f} {'WIN ' if t.won else 'LOSS'} {t.net_pnl:+7.2f}"
+            this = (f"{t.fill.side}@{t.fill.avg_price:.2f} {outcome} "
+                    + c.pnl(t.net_pnl, format(t.net_pnl, "+7.2f")))
+            pad = " " * max(0, 24 - len(plain))
         elif s.retired:
-            this = "retired"
+            this, pad = c.dim(format("retired", "<24")), ""
         else:
-            this = "pass"
+            this, pad = c.dim(format("pass", "<24")), ""
         lt = s.lifetime
+        life = c.pnl(lt.net_pnl, format(lt.net_pnl, ">+9.2f"))
         lines.append(
-            f"  {s.name:<20} {this:<24} {s.bankroll:>9.2f} "
-            f"{lt.net_pnl:>+9.2f} {lt.trades:>6} {lt.hit_pct*100:>5.1f} {s.generations_survived:>4}"
+            f"  {s.name:<20} {this}{pad} {s.bankroll:>9.2f} "
+            f"{life} {lt.trades:>6} {lt.hit_pct*100:>5.1f} {s.generations_survived:>4}"
         )
     return "\n".join(lines)
 

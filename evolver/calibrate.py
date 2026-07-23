@@ -20,6 +20,7 @@ from typing import Callable, List, Optional
 
 from polybot.synthesis import SynthesisError
 
+from . import colors as c
 from .config import Config
 from .context import Ctx
 from .engine import score_trade
@@ -123,9 +124,11 @@ def run_calibration(
             entry = (side, token_id, paper_fill, real_fill, order)
             break
 
+        if entry is None:
+            continue  # strategy passed this window — don't wait for its resolution
         resolution = market.resolve(handle)
         resolved = resolution.official_side or resolution.coinbase_side
-        if entry is None or resolved is None:
+        if resolved is None:
             continue
 
         side, token_id, paper_fill, real_fill, order = entry
@@ -169,12 +172,16 @@ def run_calibration(
 # --------------------------------------------------------------------------- #
 def format_record_line(rec: dict) -> str:
     market = rec.get("title") or rec["window_id"]
+    result = c.green("WIN") if rec.get("real_won") else c.red("LOSS")
+    num = c.bold("#" + str(rec["seq"] + 1))
+    paper_pnl = c.pnl(rec["paper_net_pnl"], format(rec["paper_net_pnl"], "+.3f"))
+    real_pnl = c.pnl(rec["real_net_pnl"], format(rec["real_net_pnl"], "+.3f"))
     return (
-        f"#{rec['seq']+1} {market} | {rec['side']} -> {rec['resolved_side']} | "
+        f"{num} {c.bold(market)} | {rec['side']} -> {c.cyan(rec['resolved_side'])} {result} | "
         f"price paper {rec['paper_price']:.3f} / real {rec['real_price']:.3f} "
         f"(Δ{rec['real_price']-rec['paper_price']:+.3f}) | "
         f"fee p {rec['paper_fee']:.4f}/r {rec['real_fee']:.4f} | "
-        f"pnl paper {rec['paper_net_pnl']:+.3f} / real {rec['real_net_pnl']:+.3f} "
+        f"pnl paper {paper_pnl} / real {real_pnl} "
         f"(Δ{rec['real_net_pnl']-rec['paper_net_pnl']:+.3f})"
     )
 
