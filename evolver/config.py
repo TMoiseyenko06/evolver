@@ -58,6 +58,10 @@ class Config:
     diversity_lookback_windows: int = 50
     max_repair_attempts: int = 1
     max_diversity_retries: int = 2
+    # A single OpenRouter reply can under-deliver (invalid/duplicate blocks). Retry
+    # breeding up to this many times per generation so the population always refills
+    # to population_size instead of silently shrinking.
+    max_breed_attempts: int = 3
 
     # --- market ---
     product: str = "BTC-USD"

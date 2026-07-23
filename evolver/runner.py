@@ -75,6 +75,18 @@ def run_loop(
         # Resume: continue at the next generation that still needs to run.
         generation = store.next_generation_to_run()
         log.info("resuming with %d alive strategies at generation %d", len(population), generation)
+        # If the target grew (or attrition left us short), top the population back
+        # up to population_size now instead of waiting a full generation. The alive
+        # strategies act as the parents to breed from.
+        if len(population) < config.population_size:
+            shortfall = config.population_size - len(population)
+            log.info("population %d < target %d; breeding %d new strategies before running",
+                     len(population), config.population_size, shortfall)
+            extra = evolve(population, [], client, store, config, generation)
+            for s in extra:
+                store.save_state(s, alive=True, generation=generation)
+            population = population + extra
+            log.info("population topped up to %d", len(population))
 
     completed = 0
     while True:

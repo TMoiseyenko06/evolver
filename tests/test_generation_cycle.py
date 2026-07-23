@@ -281,6 +281,61 @@ def test_agreement_ignores_mutual_pass_windows():
     assert agreement([None, None], [None, None]) == 0.0
 
 
+def test_evolve_refills_when_a_reply_underdelivers(tmp_path):
+    # A single OpenRouter reply may return fewer valid blocks than requested; evolve
+    # must keep breeding until the population is back up to population_size.
+    from evolver.generation import evolve
+    from evolver.strategy import LoadedStrategy
+
+    cfg = make_config(tmp_path, population_size=5, survivors=2)
+    cfg.duplicate_threshold = 1.0
+    store = Store(cfg)
+    survivors = [
+        LoadedStrategy.create(strategy_source("s1", BODY_ALWAYS_UP), 1, cfg),
+        LoadedStrategy.create(strategy_source("s2", BODY_ALWAYS_DOWN), 1, cfg),
+    ]
+    # First reply delivers only 1 of the 3 needed; the second supplies the rest.
+    client = FakeClient.from_source_batches([
+        make_fake_sources([("n1", BODY_PASS, "novel")]),
+        make_fake_sources([("n2", BODY_MOMENTUM, "novel"), ("n3", BODY_LATE_UP, "novel")]),
+    ])
+    replacements = evolve(survivors, [], client, store, cfg, generation=2)
+    assert len(replacements) == 3
+    assert len(survivors) + len(replacements) == cfg.population_size
+    assert len(client.calls) == 2  # a second breeding round was needed to fill
+    store.close()
+
+
+def test_resume_breeds_up_to_grown_population(tmp_path):
+    # Operator raises population_size and restarts: the resumed run should top the
+    # population back up to the new target instead of waiting a full generation.
+    cfg = make_config(tmp_path, population_size=3, survivors=3, windows_per_generation=2)
+    cfg.duplicate_threshold = 1.0
+    store = Store(cfg)
+    market = MockMarket(default_window_specs())
+    seed_client = FakeClient.from_source_batches([make_fake_sources([
+        ("a", BODY_ALWAYS_UP, "novel"),
+        ("b", BODY_ALWAYS_DOWN, "novel"),
+        ("c", BODY_PASS, "novel"),
+    ])])
+    run_loop(market, seed_client, store, cfg, max_generations=1)
+    store.close()
+
+    # Restart with a larger target.
+    cfg2 = make_config(tmp_path, population_size=6, survivors=6, windows_per_generation=2)
+    cfg2.duplicate_threshold = 1.0
+    store2 = Store(cfg2)
+    assert len(store2.load_alive_strategies(cfg2)) == 3  # only the 3 seeded so far
+    topup_client = FakeClient.from_source_batches([make_fake_sources([
+        ("d", BODY_MOMENTUM, "novel"),
+        ("e", BODY_LATE_UP, "novel"),
+        ("f", BODY_PASS, "novel"),
+    ])])
+    run_loop(MockMarket(default_window_specs()), topup_client, store2, cfg2, max_generations=1)
+    assert len(store2.load_alive_strategies(cfg2)) == 6  # topped up to the new target
+    store2.close()
+
+
 def test_duplicate_is_rejected_and_replaced(tmp_path):
     cfg = make_config(tmp_path, population_size=2, survivors=1)
     cfg.duplicate_threshold = 0.9

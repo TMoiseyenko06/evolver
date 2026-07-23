@@ -464,13 +464,31 @@ def evolve(
     config: Config,
     generation: int,
 ) -> List[LoadedStrategy]:
-    """Create replacements for the next generation from survivors + retirees."""
-    n_needed = config.population_size - len(survivors)
+    """Breed replacements until the population is back up to ``population_size``.
+
+    A single OpenRouter reply can under-deliver (blocks that fail the sandbox or are
+    near-duplicates that can't be replaced), which would let the population shrink
+    generation over generation. So we keep breeding — asking only for the shortfall
+    each round — until the population is full or ``max_breed_attempts`` is reached.
+    """
     taken = set(store.all_strategy_sources().keys())
-    user = evolution_prompt(survivors, retirees, n_needed)
-    replacements = generate_batch(
-        client, store, config, generation=generation, n_needed=n_needed,
-        system=SYSTEM_PROMPT, user=user, kind="evolution",
-        existing=survivors, taken_names=taken,
-    )
+    replacements: List[LoadedStrategy] = []
+    for attempt in range(max(1, config.max_breed_attempts)):
+        n_needed = config.population_size - len(survivors) - len(replacements)
+        if n_needed <= 0:
+            break
+        user = evolution_prompt(survivors, retirees, n_needed)
+        batch = generate_batch(
+            client, store, config, generation=generation, n_needed=n_needed,
+            system=SYSTEM_PROMPT, user=user, kind="evolution",
+            existing=survivors + replacements, taken_names=taken,
+        )
+        replacements.extend(batch)
+        if not batch:
+            log.warning("evolve attempt %d/%d bred 0 new strategies",
+                        attempt + 1, config.max_breed_attempts)
+    have = len(survivors) + len(replacements)
+    if have < config.population_size:
+        log.warning("population under target after breeding: %d/%d",
+                    have, config.population_size)
     return replacements

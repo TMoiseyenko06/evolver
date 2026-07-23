@@ -311,8 +311,18 @@ the one command that touches real funds.
 - **Auto-retired / failed strategies always sink below survivors** regardless of
   P&L. If auto-retirements exceed the normal bottom-5, more replacements are bred
   so the population returns to size.
+- **Population always refills to `population_size`**: each generation breeds
+  `population_size − survivors` new strategies. Because a single OpenRouter reply
+  can under-deliver (blocks that fail the sandbox or are near-duplicates), breeding
+  retries up to `max_breed_attempts` (default 3), asking only for the shortfall each
+  round, so the population never silently shrinks. **Note:** if `survivors ==
+  population_size` nothing is culled and nothing new is bred — keep `survivors <
+  population_size` (default 10 vs 20) for fresh strategies every generation.
 - **Resume**: `run` reloads the alive population from SQLite and continues at the
   next unfinished generation; an interrupted run loses nothing already persisted.
+  If the alive count is below `population_size` (e.g. you raised the target), the
+  resumed run breeds up to the target *before* running the generation rather than
+  waiting a full cycle.
 - **Default model** is `anthropic/claude-opus-4.8`; override with `EVOLVER_MODEL`
   or `Config.model`.
 
