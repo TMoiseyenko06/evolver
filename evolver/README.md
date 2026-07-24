@@ -299,6 +299,16 @@ the one command that touches real funds.
   comparable scale.
 - **Fee is charged on filled shares at the volume-weighted average fill price**,
   so a strategy's `ctx.breakeven` estimate matches what it actually pays.
+- **Fills model slippage on cheap "longshot" prices.** Walking the *displayed* ask
+  book overstates fills at extreme-cheap prices, because that displayed liquidity is
+  largely phantom/stale — live calibration showed a `0.06` displayed fill actually
+  executing near `0.17`. So the sim worsens the effective price by
+  `slip = slippage_coeff·(0.5 − price)^slippage_exp` for sub-0.50 entries (≈0 at
+  normal/favorite prices, large at the extreme): the same dollars buy fewer shares,
+  so the win pays less. Without this, longshot strategies looked profitable on paper
+  for fills the market never gives — and the ranking rewarded a distortion. The
+  `calibrate` command uses the *same* model, so its real−paper P&L residual tells you
+  how well `slippage_coeff` is tuned (centre it on 0). `slippage_coeff = 0` disables.
 - **A strategy is not called again after it enters** a window (one entry max, no
   exits) — its pre-entry passes are still logged.
 - **Bankroll guard**: a strategy that can't afford the $10 stake takes a forced

@@ -71,6 +71,29 @@ def test_simulate_fill_empty_book_returns_none():
     assert simulate_fill("Up", [], 10.0) is None
 
 
+def test_slippage_worsens_cheap_longshot_fills():
+    from evolver.engine import apply_slippage
+
+    # Reproduces the live calibration finding: a 0.06 displayed fill executes near
+    # 0.17, so the same dollars buy far fewer shares (smaller win).
+    ideal = simulate_fill("Down", [(0.06, 100000)], 1.0)          # no slippage
+    real = simulate_fill("Down", [(0.06, 100000)], 1.0, 0.55, 2.0)  # modeled slippage
+    assert ideal.avg_price == pytest.approx(0.06)
+    assert real.avg_price == pytest.approx(apply_slippage(0.06, 0.55, 2.0), rel=1e-6)
+    assert real.avg_price > 0.16  # displayed 0.06 really fills ~0.17
+    assert real.shares < ideal.shares * 0.4  # ~1/3 the shares => ~1/3 the payout
+    assert real.cost == pytest.approx(ideal.cost)  # same dollars spent
+
+
+def test_slippage_negligible_at_normal_prices():
+    # At normal/favorite prices the sim already matches reality, so slippage ≈ 0.
+    ideal = simulate_fill("Up", [(0.50, 1000)], 10.0)
+    real = simulate_fill("Up", [(0.50, 1000)], 10.0, 0.55, 2.0)
+    assert real.avg_price == pytest.approx(ideal.avg_price)  # gap<=0 at 0.50 -> no slip
+    near = simulate_fill("Up", [(0.45, 1000)], 10.0, 0.55, 2.0)
+    assert near.avg_price - 0.45 < 0.005  # <0.5c slip at 0.45
+
+
 # --- scoring -------------------------------------------------------------- #
 def test_winning_trade_pnl():
     fill = Fill(side="Up", shares=20.0, cost=10.0, avg_price=0.50, fee=0.312)

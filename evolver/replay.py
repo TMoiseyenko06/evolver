@@ -87,7 +87,7 @@ def replay_strategy(source: str, windows: List[WindowData], config: Config) -> R
         # Fill against the book at the poll where the strategy entered.
         entry_snap = next((s for s in w.polls if s.poll_index == act["poll_index"]), w.polls[-1])
         asks = entry_snap.books.get(side, {}).get("asks", [])
-        fill = simulate_fill(side, asks, config.stake)
+        fill = simulate_fill(side, asks, config.stake, config.slippage_coeff, config.slippage_exp)
         if fill is None:
             result.per_window.append({"window_id": w.window_id, "action": side, "filled": False})
             continue

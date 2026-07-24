@@ -42,16 +42,50 @@ def walk_ask_book(asks: List[Level], stake: float) -> tuple:
     return shares, cost, avg_price
 
 
-def simulate_fill(side: str, asks: List[Level], stake: float) -> Optional[Fill]:
+def apply_slippage(avg_price: float, slippage_coeff: float, slippage_exp: float) -> float:
+    """Worsen a fill price to model thin/phantom liquidity at cheap prices.
+
+    The displayed ask book is walked to get ``avg_price``, but displayed size at
+    cheap "longshot" prices is largely non-executable: live calibration showed a
+    0.06 displayed fill actually executing near 0.17. We model that as
+    ``slip = slippage_coeff * (0.5 - price)**slippage_exp`` for sub-0.50 entries —
+    it grows toward the cheap extreme and is ~0 at normal/favorite prices (where the
+    sim already matches reality). The effective price is capped just under 1.0.
+    """
+    if slippage_coeff <= 0 or avg_price <= 0:
+        return avg_price
+    gap = 0.5 - avg_price
+    if gap <= 0:  # buying the favorite side — displayed book is realistic enough
+        return avg_price
+    slip = slippage_coeff * (gap ** slippage_exp)
+    return min(avg_price + slip, 0.999)
+
+
+def simulate_fill(
+    side: str,
+    asks: List[Level],
+    stake: float,
+    slippage_coeff: float = 0.0,
+    slippage_exp: float = 2.0,
+) -> Optional[Fill]:
     """Simulate buying ``stake`` dollars of ``side`` by walking its ask book.
 
     The taker fee is charged on the filled shares at the volume-weighted average
     fill price, matching ``ctx.fee`` so a strategy's breakeven estimate lines up
     with what it actually pays. Returns None if nothing could be filled.
+
+    ``slippage_coeff`` (0 = off) models non-executable displayed liquidity at cheap
+    prices (see :func:`apply_slippage`): the same dollars fill at a worse price, so
+    you get fewer shares — which is what stops the sim from paying longshot
+    strategies for fills the market never gives.
     """
     shares, cost, avg_price = walk_ask_book(asks, stake)
     if shares <= 0:
         return None
+    eff_price = apply_slippage(avg_price, slippage_coeff, slippage_exp)
+    if eff_price > avg_price:
+        shares = cost / eff_price  # same dollars, worse price => fewer shares
+        avg_price = eff_price
     fee = fees.fee(shares, avg_price)
     return Fill(side=side, shares=shares, cost=cost, avg_price=avg_price, fee=fee)
 

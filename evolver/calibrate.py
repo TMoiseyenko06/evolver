@@ -72,7 +72,7 @@ def run_calibration(
     max_consecutive_failures: int = 3,
 ) -> List[dict]:
     """Collect ``n_trades`` paired paper/real trades and persist each comparison."""
-    paper = PaperExecutor()
+    paper = PaperExecutor(slippage_coeff=config.slippage_coeff, slippage_exp=config.slippage_exp)
     records: List[dict] = []
     seq = 0
     consecutive_failures = 0

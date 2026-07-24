@@ -53,6 +53,20 @@ class Config:
     max_failures: int = 3
     allowed_imports: FrozenSet[str] = frozenset({"math", "statistics"})
 
+    # --- fill realism (slippage) ---
+    # The paper fill walks the DISPLAYED ask book, but displayed liquidity at cheap
+    # "longshot" prices is largely phantom/stale: live calibration showed a 0.06
+    # displayed fill actually executing near 0.17. Model that by worsening the
+    # effective fill price by slip = slippage_coeff * (0.5 - price)**slippage_exp for
+    # sub-0.50 (cheap) entries — ≈0 at normal/favorite prices, large at the longshot
+    # extreme. This stops the sim (and thus the evolver/tuner rankings) from paying
+    # strategies for fills the market never gives — the distortion that made longshot
+    # strategies look artificially profitable. Coarse model fit to limited real data;
+    # recalibrate with the `calibrate` command as more real fills accrue (raise the
+    # coeff until the real−paper P&L residual centres on 0). Set coeff=0 to disable.
+    slippage_coeff: float = 0.55
+    slippage_exp: float = 2.0
+
     # --- selection / culling ---
     # Survival is ranked by a RISK-ADJUSTED (Sharpe-style) score on LIFETIME stats:
     # mean per-trade P&L divided by its volatility, so consistent earners beat

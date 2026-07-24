@@ -21,11 +21,20 @@ class Executor(Protocol):
     def fill(self, side: str, token_id: str, asks: List[Level], usd: float) -> Optional[Fill]: ...
 
 
+@dataclass
 class PaperExecutor:
-    """Simulates the fill by walking the ask book (the existing paper behavior)."""
+    """Simulates the fill by walking the ask book, with the same slippage model the
+    evolver/tuner use, so calibration validates the exact sim that ranks strategies.
+
+    The calibration report's real−paper P&L residual then measures how well the
+    slippage model is tuned: centred on 0 => the sim matches reality.
+    """
+
+    slippage_coeff: float = 0.0
+    slippage_exp: float = 2.0
 
     def fill(self, side: str, token_id: str, asks: List[Level], usd: float) -> Optional[Fill]:
-        return simulate_fill(side, asks, usd)
+        return simulate_fill(side, asks, usd, self.slippage_coeff, self.slippage_exp)
 
 
 @dataclass
