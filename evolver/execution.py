@@ -18,23 +18,28 @@ from .models import Fill, Level
 
 
 class Executor(Protocol):
-    def fill(self, side: str, token_id: str, asks: List[Level], usd: float) -> Optional[Fill]: ...
+    def fill(self, side: str, token_id: str, asks: List[Level], usd: float,
+             complement_bids: Optional[List[Level]] = None) -> Optional[Fill]: ...
 
 
 @dataclass
 class PaperExecutor:
-    """Simulates the fill by walking the ask book, with the same slippage model the
-    evolver/tuner use, so calibration validates the exact sim that ranks strategies.
+    """Simulates the fill with the same fill-realism model the evolver/tuner use
+    (per-window no-arb reconstruction from the complement book, else the slippage
+    curve), so calibration validates the exact sim that ranks strategies.
 
-    The calibration report's real−paper P&L residual then measures how well the
-    slippage model is tuned: centred on 0 => the sim matches reality.
+    The calibration report's real−paper P&L residual then measures how accurate the
+    fill model is: centred on 0 => the sim matches reality.
     """
 
+    use_cross_book: bool = True
     slippage_coeff: float = 0.0
     slippage_exp: float = 2.0
 
-    def fill(self, side: str, token_id: str, asks: List[Level], usd: float) -> Optional[Fill]:
-        return simulate_fill(side, asks, usd, self.slippage_coeff, self.slippage_exp)
+    def fill(self, side: str, token_id: str, asks: List[Level], usd: float,
+             complement_bids: Optional[List[Level]] = None) -> Optional[Fill]:
+        comp = complement_bids if self.use_cross_book else None
+        return simulate_fill(side, asks, usd, comp, self.slippage_coeff, self.slippage_exp)
 
 
 @dataclass
@@ -45,7 +50,10 @@ class SynthesisExecutor:
     slippage_cap: Optional[float] = 0.98
     last_order: Optional[OrderResult] = None
 
-    def fill(self, side: str, token_id: str, asks: List[Level], usd: float) -> Optional[Fill]:
+    def fill(self, side: str, token_id: str, asks: List[Level], usd: float,
+             complement_bids: Optional[List[Level]] = None) -> Optional[Fill]:
+        # complement_bids is unused for a real order (the venue fills it), but kept to
+        # match the Executor protocol so paper and real are drop-in interchangeable.
         order = self.client.place_market_order(token_id, "BUY", usd, self.slippage_cap)
         self.last_order = order
         if order.shares <= 0:

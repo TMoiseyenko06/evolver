@@ -89,7 +89,10 @@ def run_window(
                 decisions[-1] = Decision(strat.name, snap.poll_index, None, "insufficient bankroll")
                 continue
             asks = snap.books.get(side, {}).get("asks", [])
-            fill = simulate_fill(side, asks, config.stake, config.slippage_coeff, config.slippage_exp)
+            other = "Down" if side == "Up" else "Up"
+            comp_bids = snap.books.get(other, {}).get("bids", []) if config.use_cross_book_fill else None
+            fill = simulate_fill(side, asks, config.stake, comp_bids,
+                                 config.slippage_coeff, config.slippage_exp)
             if fill is None:
                 decisions[-1] = Decision(strat.name, snap.poll_index, action, "empty book / no fill")
                 continue

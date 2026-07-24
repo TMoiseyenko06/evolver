@@ -71,27 +71,39 @@ def test_simulate_fill_empty_book_returns_none():
     assert simulate_fill("Up", [], 10.0) is None
 
 
-def test_slippage_worsens_cheap_longshot_fills():
+def test_cross_book_no_arb_reconstruction():
+    from evolver.engine import no_arb_floor
+
+    # Reproduces the live calibration finding: a displayed 0.06 Down ask is phantom;
+    # with the complement (Up) bid at 0.83, the true executable price is 1-0.83=0.17,
+    # so the same dollars buy ~1/3 the shares.
+    up_bids = [(0.83, 100000)]
+    assert no_arb_floor(up_bids) == pytest.approx(0.17)
+    ideal = simulate_fill("Down", [(0.06, 100000)], 1.0)                       # raw walk
+    real = simulate_fill("Down", [(0.06, 100000)], 1.0, complement_bids=up_bids)
+    assert ideal.avg_price == pytest.approx(0.06)
+    assert real.avg_price == pytest.approx(0.17)         # clamped up to the no-arb floor
+    assert real.shares < ideal.shares * 0.4              # ~1/3 the shares => ~1/3 payout
+    assert real.cost == pytest.approx(ideal.cost)        # same dollars spent
+
+
+def test_cross_book_leaves_consistent_prices_alone():
+    # When the displayed ask already clears the no-arb floor (normal, tight market),
+    # cross-book barely changes it.
+    down_bids = [(0.60, 1000)]  # floor for an Up buy = 1 - 0.60 = 0.40
+    fill = simulate_fill("Up", [(0.39, 1000)], 10.0, complement_bids=down_bids)
+    assert 0.39 <= fill.avg_price <= 0.41  # only lifted to the ~0.40 no-arb floor
+
+
+def test_slippage_curve_fallback_when_no_complement_book():
     from evolver.engine import apply_slippage
 
-    # Reproduces the live calibration finding: a 0.06 displayed fill executes near
-    # 0.17, so the same dollars buy far fewer shares (smaller win).
-    ideal = simulate_fill("Down", [(0.06, 100000)], 1.0)          # no slippage
-    real = simulate_fill("Down", [(0.06, 100000)], 1.0, 0.55, 2.0)  # modeled slippage
-    assert ideal.avg_price == pytest.approx(0.06)
+    # With no complement bids, fall back to the parametric slippage curve.
+    ideal = simulate_fill("Down", [(0.06, 100000)], 1.0)
+    real = simulate_fill("Down", [(0.06, 100000)], 1.0, slippage_coeff=0.55, slippage_exp=2.0)
     assert real.avg_price == pytest.approx(apply_slippage(0.06, 0.55, 2.0), rel=1e-6)
-    assert real.avg_price > 0.16  # displayed 0.06 really fills ~0.17
-    assert real.shares < ideal.shares * 0.4  # ~1/3 the shares => ~1/3 the payout
-    assert real.cost == pytest.approx(ideal.cost)  # same dollars spent
-
-
-def test_slippage_negligible_at_normal_prices():
-    # At normal/favorite prices the sim already matches reality, so slippage ≈ 0.
-    ideal = simulate_fill("Up", [(0.50, 1000)], 10.0)
-    real = simulate_fill("Up", [(0.50, 1000)], 10.0, 0.55, 2.0)
-    assert real.avg_price == pytest.approx(ideal.avg_price)  # gap<=0 at 0.50 -> no slip
-    near = simulate_fill("Up", [(0.45, 1000)], 10.0, 0.55, 2.0)
-    assert near.avg_price - 0.45 < 0.005  # <0.5c slip at 0.45
+    assert real.avg_price > 0.16
+    assert real.shares < ideal.shares * 0.4
 
 
 # --- scoring -------------------------------------------------------------- #

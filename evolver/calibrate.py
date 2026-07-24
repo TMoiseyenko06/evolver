@@ -72,7 +72,8 @@ def run_calibration(
     max_consecutive_failures: int = 3,
 ) -> List[dict]:
     """Collect ``n_trades`` paired paper/real trades and persist each comparison."""
-    paper = PaperExecutor(slippage_coeff=config.slippage_coeff, slippage_exp=config.slippage_exp)
+    paper = PaperExecutor(use_cross_book=config.use_cross_book_fill,
+                          slippage_coeff=config.slippage_coeff, slippage_exp=config.slippage_exp)
     records: List[dict] = []
     seq = 0
     consecutive_failures = 0
@@ -90,8 +91,10 @@ def run_calibration(
             side = action["side"]
             token_id = handle.token_map.get(side, "")
             asks = snap.books.get(side, {}).get("asks", [])
+            other = "Down" if side == "Up" else "Up"
+            comp_bids = snap.books.get(other, {}).get("bids", [])
 
-            paper_fill = paper.fill(side, token_id, asks, config.live_stake)
+            paper_fill = paper.fill(side, token_id, asks, config.live_stake, comp_bids)
             if paper_fill is None:
                 log.info("%s: driver entered %s but book empty; no real order placed", handle.window_id, side)
                 break

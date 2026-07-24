@@ -53,17 +53,27 @@ class Config:
     max_failures: int = 3
     allowed_imports: FrozenSet[str] = frozenset({"math", "statistics"})
 
-    # --- fill realism (slippage) ---
+    # --- fill realism ---
     # The paper fill walks the DISPLAYED ask book, but displayed liquidity at cheap
     # "longshot" prices is largely phantom/stale: live calibration showed a 0.06
-    # displayed fill actually executing near 0.17. Model that by worsening the
-    # effective fill price by slip = slippage_coeff * (0.5 - price)**slippage_exp for
-    # sub-0.50 (cheap) entries — ≈0 at normal/favorite prices, large at the longshot
-    # extreme. This stops the sim (and thus the evolver/tuner rankings) from paying
-    # strategies for fills the market never gives — the distortion that made longshot
-    # strategies look artificially profitable. Coarse model fit to limited real data;
-    # recalibrate with the `calibrate` command as more real fills accrue (raise the
-    # coeff until the real−paper P&L residual centres on 0). Set coeff=0 to disable.
+    # displayed fill actually executing near 0.17. Correct it two ways:
+    #
+    # 1. use_cross_book_fill (preferred, exact): reconstruct the true executable price
+    #    per window from the COMPLEMENT side's book via no-arbitrage. On a binary
+    #    Up+Down=$1, a maker bidding `cb` for the other side implicitly offers this
+    #    side at 1-cb, so the ask can't execute below 1 - best_complement_bid. This is
+    #    exact for each window (not an aggregate), needs no fitting, and reproduces the
+    #    calibration (Up bid ~0.83 -> Down fills ~0.17). Falls back to (2) when the
+    #    complement book is missing.
+    # 2. slippage curve (fallback): worsen price by slippage_coeff*(0.5-price)^exp for
+    #    sub-0.50 entries. Aggregate approximation used only when (1) can't apply.
+    #
+    # Both stop the sim (and thus evolver/tuner rankings) from paying strategies for
+    # fills the market never gives — the distortion that made longshot strategies look
+    # artificially profitable. `calibrate` uses the same model, so its real−paper P&L
+    # residual measures accuracy (centre on 0). Set use_cross_book_fill=False and
+    # slippage_coeff=0 for the raw idealised walk.
+    use_cross_book_fill: bool = True
     slippage_coeff: float = 0.55
     slippage_exp: float = 2.0
 
