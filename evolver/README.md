@@ -279,12 +279,22 @@ the one command that touches real funds.
 
 ## Design decisions (made without asking, per the brief)
 
-- **Culling ranks by *this generation's* net P&L, not lifetime.** All strategies
-  see identical data each generation, so head-to-head on that shared data is the
-  fair comparison and gives new strategies a real shot against entrenched
-  survivors. **Lifetime** stats and **generations-survived** — the noise-robust
-  signal the spec calls out ("50 windows is small enough that one generation's
-  winner is often luck") — drive the human-facing `leaderboard`, not the cull.
+- **Culling ranks by lifetime RISK-ADJUSTED P&L (Sharpe-style).** The survival
+  score is `mean per-trade P&L ÷ P&L volatility`, computed on **lifetime** stats
+  (`generation.risk_adjusted_score`). This deliberately replaced ranking by a single
+  generation's raw net P&L, which had three failure modes seen in practice: (1) one
+  unlucky 50-window generation culled a proven strategy; (2) raw P&L rewarded
+  variance — a strategy that profited only from rare longshot jackpots outranked a
+  steady high-hit-rate earner; and (3) in a losing generation a *do-nothing*
+  strategy (0 P&L) outranked strategies that traded and lost. Risk-adjustment fixes
+  all three: consistent earners beat volatile ones, lifetime stats smooth out single
+  generations, and a strategy that never traded scores `-inf`. Two guards keep it
+  robust — a volatility floor (`risk_vol_floor`) stops 1–2 identical trades posting
+  an infinite score, and small-sample shrinkage `trades/(trades+risk_trade_prior)`
+  stops a couple of lucky trades topping the board. The Sharpe *ratio* doesn't
+  inflate with trade count, so older strategies get no unfair head start.
+  **Generations-survived** and lifetime totals still drive the human-facing
+  `leaderboard`.
 - **Tiebreak** = `hit_fraction (0–1) − avg_breakeven (price 0–1)`, both on a
   comparable scale.
 - **Fee is charged on filled shares at the volume-weighted average fill price**,

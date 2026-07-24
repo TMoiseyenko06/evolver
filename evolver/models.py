@@ -9,6 +9,7 @@ strategy saw and re-derives identical decisions and fills.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -148,6 +149,7 @@ class Stats:
     net_pnl: float = 0.0
     sum_breakeven: float = 0.0  # sum of breakeven(avg_price) over trades
     fees_paid: float = 0.0
+    sum_pnl_sq: float = 0.0  # sum of per-trade net_pnl**2, for P&L volatility
 
     def record(self, result: TradeResult) -> None:
         self.trades += 1
@@ -156,6 +158,7 @@ class Stats:
         self.net_pnl += result.net_pnl
         self.sum_breakeven += result.breakeven
         self.fees_paid += result.fill.fee
+        self.sum_pnl_sq += result.net_pnl ** 2
 
     @property
     def hit_pct(self) -> float:
@@ -165,6 +168,19 @@ class Stats:
     @property
     def avg_breakeven(self) -> float:
         return self.sum_breakeven / self.trades if self.trades else 0.0
+
+    @property
+    def mean_pnl(self) -> float:
+        """Average P&L per trade."""
+        return self.net_pnl / self.trades if self.trades else 0.0
+
+    @property
+    def pnl_std(self) -> float:
+        """Std dev of per-trade P&L (population). 0 with fewer than 2 trades."""
+        if self.trades < 2:
+            return 0.0
+        var = self.sum_pnl_sq / self.trades - self.mean_pnl ** 2
+        return math.sqrt(var) if var > 0 else 0.0
 
     @property
     def tiebreak(self) -> float:
@@ -177,13 +193,15 @@ class Stats:
         self.net_pnl = 0.0
         self.sum_breakeven = 0.0
         self.fees_paid = 0.0
+        self.sum_pnl_sq = 0.0
 
     def to_json(self) -> dict:
         return asdict(self)
 
     @staticmethod
     def from_json(d: dict) -> "Stats":
-        return Stats(**{k: d.get(k, 0) for k in ("trades", "wins", "net_pnl", "sum_breakeven", "fees_paid")})
+        return Stats(**{k: d.get(k, 0) for k in
+                        ("trades", "wins", "net_pnl", "sum_breakeven", "fees_paid", "sum_pnl_sq")})
 
 
 def _books_to_json(books: Dict[str, Book]) -> dict:

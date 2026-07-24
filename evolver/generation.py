@@ -23,6 +23,7 @@ spec calls out) drive the *leaderboard*, not the cull.
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import threading
 from typing import Dict, List, Optional, Tuple
@@ -283,19 +284,55 @@ def run_generation(
 # --------------------------------------------------------------------------- #
 # Ranking + carry-forward
 # --------------------------------------------------------------------------- #
+def risk_adjusted_score(stats: "Stats", config: Config) -> float:
+    """Sharpe-style survival score: mean per-trade P&L divided by its volatility.
+
+    Rewards CONSISTENT positive P&L and penalises high-variance (longshot) returns,
+    so a strategy that only profits via rare jackpots ranks below a steady earner.
+    Two guards keep it robust:
+
+    - ``risk_vol_floor`` is blended into the denominator so a strategy with 1-2
+      identical trades (zero measured volatility) can't post an infinite score.
+    - a small-sample shrinkage ``trades/(trades+risk_trade_prior)`` pulls low-trade
+      strategies toward 0, so a couple of lucky trades can't top the board.
+
+    A strategy that never traded scores ``-inf`` — it can't survive on merit, which
+    stops do-nothing strategies from surviving a losing generation by default.
+    """
+    n = stats.trades
+    if n == 0:
+        return float("-inf")
+    denom = math.sqrt(stats.pnl_std ** 2 + config.risk_vol_floor ** 2)
+    sharpe = stats.mean_pnl / denom
+    shrink = n / (n + config.risk_trade_prior)
+    return sharpe * shrink
+
+
+def ranking_key(strategy: LoadedStrategy, config: Config):
+    """Sort key for survival: lifetime risk-adjusted score, then lifetime edge.
+
+    Uses LIFETIME (not single-generation) stats so one unlucky 50-window generation
+    can't cull a strategy with a proven track record. The Sharpe-style ratio is fair
+    across strategy ages (it doesn't inflate with trade count), so newer strategies
+    aren't disadvantaged purely for being young.
+    """
+    return (risk_adjusted_score(strategy.lifetime, config), strategy.lifetime.tiebreak)
+
+
 def rank_and_cull(
     strategies: List[LoadedStrategy], config: Config
 ) -> Tuple[List[LoadedStrategy], List[LoadedStrategy]]:
     """Return (survivors, retirees).
 
-    Alive strategies rank by this generation's net P&L (tiebreak: hit% minus avg
-    breakeven). The top ``survivors`` live on with cumulative bankroll/stats and
-    an incremented generations-survived counter. Everyone else — plus any
-    auto-retired (crashy) strategy — is retired.
+    Alive strategies rank by lifetime RISK-ADJUSTED P&L (Sharpe-style: mean per-trade
+    P&L over its volatility; tiebreak: hit% minus avg breakeven). The top
+    ``survivors`` live on with cumulative bankroll/stats and an incremented
+    generations-survived counter. Everyone else — plus any auto-retired (crashy)
+    strategy — is retired.
     """
     alive = [s for s in strategies if not s.retired]
     failed = [s for s in strategies if s.retired]
-    alive.sort(key=lambda s: (s.gen.net_pnl, s.gen.tiebreak), reverse=True)
+    alive.sort(key=lambda s: ranking_key(s, config), reverse=True)
 
     n_survive = min(config.survivors, len(alive))
     survivors = alive[:n_survive]
@@ -305,7 +342,7 @@ def rank_and_cull(
         s.generations_survived += 1
     for s in retirees:
         if not s.retired:
-            s.retire(f"culled: rank below top {config.survivors} by generation net P&L")
+            s.retire(f"culled: rank below top {config.survivors} by risk-adjusted P&L")
     return survivors, retirees
 
 

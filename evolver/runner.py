@@ -11,7 +11,7 @@ import logging
 from typing import List, Optional
 
 from .config import Config
-from .generation import evolve, rank_and_cull, run_generation, seed_population
+from .generation import evolve, rank_and_cull, ranking_key, run_generation, seed_population
 from .market import MarketProvider
 from .reporting import write_generation_report
 from .store import Store
@@ -20,9 +20,9 @@ from .strategy import LoadedStrategy
 log = logging.getLogger("evolver")
 
 
-def _persist_generation_state(store: Store, population, survivors, generation) -> None:
+def _persist_generation_state(store: Store, population, survivors, generation, config) -> None:
     survivor_names = {s.name for s in survivors}
-    ranked = sorted(population, key=lambda s: (s.gen.net_pnl, s.gen.tiebreak), reverse=True)
+    ranked = sorted(population, key=lambda s: ranking_key(s, config), reverse=True)
     for rank, s in enumerate(ranked, 1):
         alive = s.name in survivor_names
         store.save_state(s, alive=alive, generation=generation)
@@ -44,7 +44,7 @@ def run_one_generation(
 
     survivors, retirees = rank_and_cull(population, config)
     report_path = write_generation_report(config, generation, population, survivors)
-    _persist_generation_state(store, population, survivors, generation)
+    _persist_generation_state(store, population, survivors, generation, config)
     store.finish_generation(generation, report_path)
     log.info("generation %d survivors: %s", generation, [s.name for s in survivors])
 

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .config import Config
-from .generation import rank_and_cull, run_generation
+from .generation import rank_and_cull, ranking_key, run_generation
 from .market import MarketProvider
 from .openrouter import extract_code_blocks
 from .sandbox import SandboxError
@@ -210,7 +210,7 @@ def run_tuning(
     while population:
         run_generation(population, market, store, config, generation)
         survivors, retirees = rank_and_cull(population, config)
-        _persist(store, population, survivors, generation)
+        _persist(store, population, survivors, generation, config)
         report = write_tune_report(config, base_label, generation, population, survivors)
         store.finish_generation(generation, report)
         if on_generation is not None:
@@ -231,9 +231,9 @@ def run_tuning(
     return population
 
 
-def _persist(store, population, survivors, generation):
+def _persist(store, population, survivors, generation, config):
     survivor_names = {s.name for s in survivors}
-    ranked = sorted(population, key=lambda s: (s.gen.net_pnl, s.gen.tiebreak), reverse=True)
+    ranked = sorted(population, key=lambda s: ranking_key(s, config), reverse=True)
     for rank, s in enumerate(ranked, 1):
         alive = s.name in survivor_names
         store.save_state(s, alive=alive, generation=generation)
@@ -243,7 +243,7 @@ def _persist(store, population, survivors, generation):
 def write_tune_report(config: Config, base_label: str, generation: int,
                       population: List[LoadedStrategy], survivors) -> str:
     survivor_names = {s.name for s in survivors}
-    ranked = sorted(population, key=lambda s: (s.gen.net_pnl, s.gen.tiebreak), reverse=True)
+    ranked = sorted(population, key=lambda s: ranking_key(s, config), reverse=True)
     best = ranked[0] if ranked else None
     lines = [f"# Tuning {base_label} — generation {generation}\n"]
     if best is not None:

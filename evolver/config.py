@@ -53,6 +53,16 @@ class Config:
     max_failures: int = 3
     allowed_imports: FrozenSet[str] = frozenset({"math", "statistics"})
 
+    # --- selection / culling ---
+    # Survival is ranked by a RISK-ADJUSTED (Sharpe-style) score on LIFETIME stats:
+    # mean per-trade P&L divided by its volatility, so consistent earners beat
+    # high-variance longshot strategies, and one unlucky generation can't cull a
+    # proven strategy. A strategy that never traded scores below everyone.
+    risk_vol_floor: float = 2.0     # $ volatility floor: avoids div-by-zero and absurd
+                                    # scores from 1-2 identical trades.
+    risk_trade_prior: float = 10.0  # small-sample shrinkage: trust ≈ trades/(trades+prior),
+                                    # so a couple of lucky trades can't top the board.
+
     # --- diversity ---
     duplicate_threshold: float = 0.85  # reject a new strategy whose TRADES are >85% identical
     diversity_lookback_windows: int = 50
