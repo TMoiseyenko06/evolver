@@ -88,6 +88,7 @@ class ArbOpportunity:
     edge: float                        # 1 - net_cost  (>0 = arb)
     max_size: float                    # min ask_size across legs
     ends_at: Optional[str] = None
+    sum_mid: Optional[float] = None    # field arb: Σ mid prices (completeness signal, ~1 = full field)
 
     @property
     def max_profit(self) -> float:

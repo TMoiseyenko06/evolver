@@ -82,6 +82,25 @@ def scan_intra(client: SynthesisClient, venue: str, max_markets: int = 1000,
     return opps
 
 
+def scan_field(client: SynthesisClient, venue: str, max_markets: int = 1000,
+               min_edge: float = 0.0, realistic: bool = True) -> List[ArbOpportunity]:
+    """Scan a venue for multi-outcome 'field' locks (buy YES on every outcome < $1).
+
+    Groups markets by event (e.g. all golfers in a tournament) and checks the field
+    sum. Uses executable asks; guards against incomplete fields via the mid-sum
+    heuristic. Results are HUMAN-CONFIRM candidates (verify the field is exhaustive).
+    """
+    markets = list_all(client, venue, max_markets)
+    groups = detect.group_by_event(markets)
+    log.info("%s: %d markets in %d events", venue, len(markets), len(groups))
+    all_tokens = [t for m in markets for t in m.token_ids]
+    books = fetch_books(client, all_tokens)
+    detect.apply_orderbooks(markets, books, realistic=realistic)
+    opps = [o for g in groups.values() if (o := detect.field_arb(g, min_edge, realistic)) is not None]
+    opps.sort(key=lambda o: o.edge, reverse=True)
+    return opps
+
+
 def scan_cross(client: SynthesisClient, max_markets: int = 1000, min_similarity: float = 0.6,
                min_edge: float = 0.0) -> List[Tuple[ArbOpportunity, float]]:
     """Match events across Polymarket+Kalshi and scan each pair for a cross-venue lock.

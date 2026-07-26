@@ -37,10 +37,13 @@ def _client() -> SynthesisClient:
 
 
 def _fmt(opp: ArbOpportunity, sim: float | None = None) -> str:
-    legs = "  +  ".join(
-        f"{leg.outcome}@{leg.ask:.3f} [{leg.venue}]" for leg in opp.legs
-    )
+    if len(opp.legs) <= 4:
+        legs = "  +  ".join(f"{leg.outcome}@{leg.ask:.3f} [{leg.venue}]" for leg in opp.legs)
+    else:
+        legs = f"{len(opp.legs)} legs, Σask {opp.gross_cost:.3f} [{opp.legs[0].venue}]"
     tag = f" · match~{sim:.0%}" if sim is not None else ""
+    if opp.sum_mid is not None:
+        tag += f" · Σmid {opp.sum_mid:.3f} (field completeness)"
     return (
         f"[{opp.kind}] edge {opp.edge*100:+.2f}%/set · net ${opp.net_cost:.3f} "
         f"(gross {opp.gross_cost:.3f} + fee {opp.fees:.3f}) · size {opp.max_size:.0f} "
@@ -72,6 +75,20 @@ def cmd_cross(args) -> int:
     return 0
 
 
+def cmd_field(args) -> int:
+    opps = scan.scan_field(_client(), args.venue, args.max_markets, args.min_edge)
+    print(f"\n{args.venue}: {len(opps)} multi-outcome field arb(s) with edge > {args.min_edge*100:.2f}%\n")
+    for o in opps[: args.top]:
+        print(_fmt(o) + "\n")
+    if opps:
+        print("NOTE: a field lock is only real if the field is COMPLETE (every possible\n"
+              "outcome is in the book). Σmid≈1 suggests completeness, but confirm no\n"
+              "outcome is missing before trusting it — a missing winner pays you $0.")
+    else:
+        print("(no field arbs — fields sum to >= $1 after fees, as expected on liquid books)")
+    return 0
+
+
 def cmd_sample(args) -> int:
     """Dump how a venue names its markets — so we can design event-matching on reality."""
     markets = scan.list_all(_client(), args.venue, max_markets=args.n)
@@ -96,7 +113,7 @@ def cmd_paper(args) -> int:
     try:
         paper.run_paper(_client(), venues, bankroll=args.bankroll, interval=args.interval,
                         min_edge=args.min_edge, per_arb_cap=args.per_arb_cap,
-                        max_markets=args.max_markets)
+                        max_markets=args.max_markets, include_field=not args.no_field)
     except KeyboardInterrupt:
         print("\nStopped.")
     return 0
@@ -127,7 +144,15 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--interval", type=float, default=30.0, help="seconds between scans")
     pp.add_argument("--per-arb-cap", type=float, default=200.0, help="max shares per single arb")
     pp.add_argument("--max-markets", type=int, default=1000)
+    pp.add_argument("--no-field", action="store_true", help="only intra-market arb, skip field arbs")
     pp.set_defaults(func=cmd_paper)
+
+    pf = sub.add_parser("field", help="multi-outcome field arb (buy every outcome of an event < $1)")
+    pf.add_argument("--venue", choices=["polymarket", "kalshi"], default="kalshi")
+    pf.add_argument("--min-edge", type=float, default=0.0)
+    pf.add_argument("--max-markets", type=int, default=1000)
+    pf.add_argument("--top", type=int, default=25)
+    pf.set_defaults(func=cmd_field)
 
     ps = sub.add_parser("sample", help="dump how a venue names its markets (for matching design)")
     ps.add_argument("--venue", choices=["polymarket", "kalshi"], default="polymarket")

@@ -74,6 +74,7 @@ def run_paper(
     min_edge: float = 0.005,
     per_arb_cap: float = 200.0,     # max shares per single arb
     max_markets: int = 1000,
+    include_field: bool = True,     # also paper-trade multi-outcome field arbs
     settle_delay: float = 120.0,    # wait this long past ends_at before realizing
     max_hold: float = 3600.0,       # realize positions with unknown ends_at after this
     on_cycle=None,
@@ -83,21 +84,30 @@ def run_paper(
     while True:
         _resolve_matured(book, settle_delay, max_hold)
         for venue in venues:
-            try:
-                opps = scan.scan_intra(client, venue, max_markets, min_edge, realistic=True)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("scan %s failed: %s", venue, exc)
-                continue
-            for opp in opps:
-                _maybe_enter(book, opp, per_arb_cap)
+            scans = [scan.scan_intra]
+            if include_field:
+                scans.append(scan.scan_field)
+            for fn in scans:
+                try:
+                    opps = fn(client, venue, max_markets, min_edge, realistic=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("%s(%s) failed: %s", fn.__name__, venue, exc)
+                    continue
+                for opp in opps:
+                    _maybe_enter(book, opp, per_arb_cap)
         _print_board(book)
         if on_cycle is not None:
             on_cycle(book)
         time.sleep(interval)
 
 
+def _pos_key(opp: ArbOpportunity) -> str:
+    """Stable dedup key for a standing opportunity (works for multi-leg fields)."""
+    return opp.kind + "|" + "|".join(sorted(l.token_id for l in opp.legs))
+
+
 def _maybe_enter(book: PaperBook, opp: ArbOpportunity, per_arb_cap: float) -> None:
-    key = opp.legs[0].market_id
+    key = _pos_key(opp)
     if key in book.open or opp.edge <= 0 or opp.max_size <= 0 or opp.net_cost <= 0:
         return
     shares = min(opp.max_size, per_arb_cap, book.bankroll / opp.net_cost)
@@ -113,9 +123,10 @@ def _maybe_enter(book: PaperBook, opp: ArbOpportunity, per_arb_cap: float) -> No
     )
     book.n_taken += 1
     book.peak_deployed = max(book.peak_deployed, book.deployed)
-    legs = " + ".join(f"{l.outcome}@{l.ask:.3f}[{l.venue}]" for l in opp.legs)
+    detail = f"{opp.kind} · {len(opp.legs)} legs" + (
+        f" · Σmid {opp.sum_mid:.3f}" if opp.sum_mid is not None else "")
     log.info("ENTER %s | %.0f sets @ net %.3f (edge %+.2f%%) cost $%.2f -> locks $%.2f | %s",
-             opp.title[:60], shares, opp.net_cost, opp.edge * 100, cost, shares * opp.edge, legs)
+             opp.title[:60], shares, opp.net_cost, opp.edge * 100, cost, shares * opp.edge, detail)
 
 
 def _resolve_matured(book: PaperBook, settle_delay: float, max_hold: float) -> None:
@@ -125,7 +136,9 @@ def _resolve_matured(book: PaperBook, settle_delay: float, max_hold: float) -> N
                   (pos.ends_at is None and now >= pos.opened_at + max_hold)
         if not matured:
             continue
-        payout = pos.shares            # intra lock: exactly one side pays $1/share
+        payout = pos.shares            # lock: exactly one bought leg pays $1/share
+                                       # (intra: guaranteed; field: assumes the field
+                                       #  was complete — one bought outcome must win)
         pnl = payout - pos.cost
         book.bankroll += payout
         book.realized_pnl += pnl

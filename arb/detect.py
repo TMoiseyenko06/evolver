@@ -145,6 +145,72 @@ def intra_market_arb(market: Market, min_edge: float = 0.0,
     return opp if opp.edge > min_edge else None
 
 
+def group_by_event(markets: List[Market]) -> Dict[str, List[Market]]:
+    """Group markets by (venue, event_id) — a multi-outcome event's sub-markets."""
+    groups: Dict[str, List[Market]] = {}
+    for m in markets:
+        if not m.event_id:
+            continue
+        groups.setdefault(f"{m.venue}:{m.event_id}", []).append(m)
+    return groups
+
+
+def field_arb(
+    markets: List[Market], min_edge: float = 0.0, realistic: bool = True,
+    min_outcomes: int = 3, mid_low: float = 0.90, mid_high: float = 1.6,
+) -> Optional[ArbOpportunity]:
+    """Multi-outcome 'field' lock: buy YES on EVERY outcome of a one-winner event.
+
+    A field of N mutually-exclusive Yes/No markets (e.g. one market per golfer, one
+    winner) pays exactly $1 total. If ``Σ YES_ask < 1`` after fees, buying the whole
+    field is a guaranteed lock. Uses EXECUTABLE asks so phantom prices don't fake it.
+
+    Guards against the two ways this goes wrong:
+    - **Not a field**: every sub-market must be Yes/No and there must be
+      ``>= min_outcomes`` of them (excludes mixed events with totals/spreads/moneyline).
+    - **Incomplete field** (the killer — a missing outcome could win and pay you $0):
+      requires ``Σ YES_mid`` within ``[mid_low, mid_high]``. A complete, fairly-priced
+      field sums to ~1 (+overround); a much smaller sum means outcomes are missing.
+      This is a heuristic — still a HUMAN-CONFIRM candidate, never an auto-trade.
+    """
+    if len(markets) < min_outcomes:
+        return None
+    legs: List[ArbLeg] = []
+    sum_mid = 0.0
+    for m in markets:
+        yes = m.quote("Yes")
+        if yes is None or m.quote("No") is None:  # must be a Yes/No market
+            return None
+        price = yes.eff_ask(realistic)
+        if price is None or price <= 0:            # a missing/empty book breaks the lock
+            return None
+        legs.append(_leg(m, yes, realistic))
+        sum_mid += yes.mid or 0.0
+    if not (mid_low <= sum_mid <= mid_high):       # likely incomplete or not a clean field
+        return None
+    gross = sum(l.ask for l in legs)
+    fee = sum(feemod.fee_per_share(l.venue, l.ask) for l in legs)
+    net = gross + fee
+    opp = ArbOpportunity(
+        kind="field", title=_field_title(markets), legs=legs, gross_cost=gross, fees=fee,
+        net_cost=net, edge=1.0 - net, max_size=min(l.ask_size for l in legs),
+        ends_at=markets[0].ends_at, sum_mid=sum_mid,
+    )
+    return opp if opp.edge > min_edge else None
+
+
+def _field_title(markets: List[Market]) -> str:
+    """Longest common title prefix (the shared proposition), else the first title."""
+    titles = [m.title for m in markets if m.title]
+    if not titles:
+        return ""
+    pre = titles[0]
+    for t in titles[1:]:
+        while not t.startswith(pre) and pre:
+            pre = pre[:-1]
+    return (pre.strip(" -:") or titles[0]) + f"  ({len(markets)} outcomes)"
+
+
 def cross_venue_arb(markets: List[Market], min_edge: float = 0.0,
                     realistic: bool = True) -> Optional[ArbOpportunity]:
     """Best complementary lock across markets for the SAME event (>=1 venue).

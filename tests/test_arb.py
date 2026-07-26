@@ -96,6 +96,62 @@ def test_cross_venue_arb_requires_matching_outcome_labels():
 
 
 # --------------------------------------------------------------------------- #
+def _field_market(cid, title, yes_ask, yes_mid, size=100):
+    m = detect.parse_markets(_markets_payload("kalshi", cid, title, yes_mid, 1 - yes_mid))[0]
+    m.event_id = "TOURNEY"
+    # No bid kept low enough (1 - yes_ask + margin) that the no-arb floor does NOT lift
+    # the YES ask, so the executable ask equals the displayed one for a clean test.
+    no_bid = round(1 - yes_ask + 0.05, 3)
+    detect.apply_orderbooks([m], parse_orderbooks({"response": [
+        {"token_id": cid + "_y", "orderbook": {"asks": {str(yes_ask): size}, "bids": {"0.01": size}}},
+        {"token_id": cid + "_n", "orderbook": {"asks": {"0.99": size}, "bids": {str(no_bid): size}}},
+    ]}), realistic=True)
+    return m
+
+
+def test_field_arb_locks_when_field_sums_below_one():
+    # Three-outcome field, YES asks 0.30+0.30+0.30 = 0.90 < 1 -> lock. Mids sum ~1.
+    field = [
+        _field_market("g1", "Open Winner - A", 0.30, 0.34),
+        _field_market("g2", "Open Winner - B", 0.30, 0.33),
+        _field_market("g3", "Open Winner - C", 0.30, 0.33),
+    ]
+    opp = detect.field_arb(field, min_edge=0.0)
+    assert opp is not None and opp.kind == "field"
+    assert len(opp.legs) == 3
+    assert opp.gross_cost == pytest.approx(0.90)
+    assert opp.edge > 0
+    assert opp.sum_mid == pytest.approx(1.0, abs=0.02)
+
+
+def test_field_arb_none_when_field_sums_above_one():
+    field = [
+        _field_market("h1", "Open Winner - A", 0.40, 0.40),
+        _field_market("h2", "Open Winner - B", 0.40, 0.40),
+        _field_market("h3", "Open Winner - C", 0.40, 0.40),
+    ]  # Σ ask 1.20 -> no lock
+    assert detect.field_arb(field, min_edge=0.0) is None
+
+
+def test_field_arb_rejects_incomplete_field():
+    # Only two thirds of the field present -> Σ mid ~0.66 < mid_low -> rejected even
+    # though Σ ask (0.30+0.30=0.60) is under $1 (a missing outcome could win -> $0).
+    field = [
+        _field_market("i1", "Open Winner - A", 0.30, 0.33),
+        _field_market("i2", "Open Winner - B", 0.30, 0.33),
+    ]
+    assert detect.field_arb(field, min_edge=0.0, min_outcomes=2) is None
+
+
+def test_group_by_event():
+    ms = (detect.parse_markets(_markets_payload("kalshi", "a", "X - A", 0.5, 0.5)) +
+          detect.parse_markets(_markets_payload("kalshi", "b", "X - B", 0.5, 0.5)))
+    for m in ms:
+        m.event_id = "E1"
+    groups = detect.group_by_event(ms)
+    assert list(groups) == ["kalshi:E1"] and len(groups["kalshi:E1"]) == 2
+
+
 def test_title_similarity_and_matching():
     assert detect.title_similarity("Will the Lakers win the title?",
                                    "Lakers win title") > 0.6
@@ -143,7 +199,7 @@ def test_paper_enter_and_resolve_locks_edge():
     )
     _maybe_enter(book, opp, per_arb_cap=100)
     assert book.n_taken == 1
-    pos = book.open["m1"]
+    pos = next(iter(book.open.values()))
     assert pos.shares == 100 and pos.cost == pytest.approx(95.0)
     assert book.bankroll == pytest.approx(405.0)
     assert pos.locked_pnl == pytest.approx(5.0)

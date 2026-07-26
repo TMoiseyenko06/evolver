@@ -15,10 +15,12 @@ purpose — measure before risking capital).
 | Kind | What | Risk |
 |---|---|---|
 | **intra-market** | Both sides of ONE binary market: `ask_Yes + ask_No < 1`. | Lowest — no event-matching, single venue, guaranteed lock. |
+| **field** (multi-outcome) | Buy YES on EVERY outcome of a one-winner event (e.g. every golfer in a tournament): `Σ ask_Yes < 1`. | Single venue, no basis risk — **but only if the field is COMPLETE.** A missing outcome that wins pays you $0. |
 | **cross-venue** | The SAME event on both venues: buy cheapest Yes + cheapest No across them. | Only a true arb if both venues **resolve the event identically** (same reference price, window, tie-break). Matching titles ≠ matching settlement. |
 
-Both reduce to the same math: find the cheapest way to buy every outcome; if that
-total (plus fees) is under $1, the difference is locked profit per set.
+All reduce to the same math: find the cheapest way to buy every mutually-exclusive
+outcome; if that total (plus fees) is under $1, the difference is locked profit per
+set — since exactly one outcome pays $1.
 
 ## Usage
 
@@ -27,8 +29,14 @@ total (plus fees) is under $1, the difference is locked profit per set.
 python -m arb intra --venue polymarket --min-edge 0.005
 python -m arb intra --venue kalshi
 
+# multi-outcome field arb: buy every outcome of a one-winner event for < $1
+python -m arb field --venue kalshi --min-edge 0.005
+
 # same event priced apart across Polymarket & Kalshi
 python -m arb cross --min-similarity 0.6 --min-edge 0.005
+
+# inspect how a venue names its markets (to design matching)
+python -m arb sample --venue kalshi --n 40
 
 # PAPER-TRADE intra-market arb on a loop, realistic fills, cumulative P&L
 python -m arb paper --venue polymarket --bankroll 500 --min-edge 0.005 --interval 30
@@ -61,8 +69,29 @@ locked profit, realized P&L, and counts. It's an honest measurement of how much
 locked arb is actually capturable after realistic fills, fees, and depth — expect
 close to zero on efficient venues, which is itself the answer.
 
-Cross-venue arb is **not** paper-traded (its P&L depends on both venues resolving
-identically, which we can't simulate yet) — `cross` still reports those candidates.
+`paper` also trades **field** arbs by default (disable with `--no-field`). A field
+lock's paper payout assumes the field was complete (one bought outcome wins) — the
+detector guards this with the `Σ mid ≈ 1` completeness heuristic, but on real money
+you must confirm no outcome is missing. Cross-venue arb is **not** paper-traded (its
+P&L depends on both venues resolving identically, which we can't simulate yet) —
+`cross` still reports those candidates.
+
+## Field (multi-outcome) arb — how it's detected
+
+Kalshi lists a tournament as one Yes/No market *per contestant* (`3M Open Winner -
+Hideki Matsuyama`), and Polymarket does the same for "who wins" events. `field`
+groups markets by event and, for events that are **all Yes/No with ≥3 outcomes**,
+checks whether `Σ executable_YES_ask < 1`. Two guards:
+- **Completeness** (`detect.field_arb`): requires `Σ YES_mid` in `[0.90, 1.6]`. A
+  complete, fairly-priced field sums to ~1 (+overround); a much smaller sum means
+  outcomes are missing from the book — and a missing winner would pay you $0. Still a
+  **human-confirm** candidate: verify the field is exhaustive before trusting it.
+- **Realistic fills**: uses executable asks, so a phantom cheap contestant can't fake
+  a field lock.
+
+Honest expectation: on liquid books `Σ YES_ask` almost always exceeds $1 (the
+overround/vig), so field locks are rare — but they're cheap to scan and are the
+arb type your data actually contains.
 
 ## How it works
 
