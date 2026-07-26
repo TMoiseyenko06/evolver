@@ -72,6 +72,22 @@ def cmd_cross(args) -> int:
     return 0
 
 
+def cmd_sample(args) -> int:
+    """Dump how a venue names its markets — so we can design event-matching on reality."""
+    markets = scan.list_all(_client(), args.venue, max_markets=args.n)
+    print(f"\n{args.venue}: showing {min(args.n, len(markets))} of {len(markets)} live markets\n")
+    for m in markets[: args.n]:
+        outs = "/".join(q.outcome for q in m.quotes)
+        raw = m.raw
+        tags = raw.get("tags") or raw.get("category") or raw.get("slug") or ""
+        print(f"- {m.title!r}")
+        print(f"    outcomes={outs}  ends_at={m.ends_at}  liq={m.liquidity:.0f} vol={m.volume:.0f}"
+              f"  id={m.market_id}")
+        if tags:
+            print(f"    tags/slug={tags}")
+    return 0
+
+
 def cmd_paper(args) -> int:
     venues = ["polymarket", "kalshi"] if args.venue == "both" else [args.venue]
     print(f"Paper-trading intra-market arb on {', '.join(venues)} with REALISTIC fills.\n"
@@ -112,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--per-arb-cap", type=float, default=200.0, help="max shares per single arb")
     pp.add_argument("--max-markets", type=int, default=1000)
     pp.set_defaults(func=cmd_paper)
+
+    ps = sub.add_parser("sample", help="dump how a venue names its markets (for matching design)")
+    ps.add_argument("--venue", choices=["polymarket", "kalshi"], default="polymarket")
+    ps.add_argument("--n", type=int, default=40)
+    ps.set_defaults(func=cmd_sample)
     return p
 
 

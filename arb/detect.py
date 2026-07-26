@@ -191,27 +191,38 @@ def normalize_title(title: str) -> frozenset:
 
 
 def title_similarity(a: str, b: str) -> float:
-    """Jaccard overlap of significant title words in [0, 1]."""
+    """Overlap coefficient of significant title words in [0, 1].
+
+    Uses ``|A∩B| / min(|A|, |B|)`` rather than Jaccard so a short title on one venue
+    ("Lakers win title") still matches a verbose one on the other ("Will the Los
+    Angeles Lakers win the 2025 NBA championship title?"), which Jaccard would miss.
+    """
     ta, tb = normalize_title(a), normalize_title(b)
     if not ta or not tb:
         return 0.0
-    return len(ta & tb) / len(ta | tb)
+    return len(ta & tb) / min(len(ta), len(tb))
 
 
 def match_events(
     markets_a: List[Market], markets_b: List[Market],
-    min_similarity: float = 0.6, ends_tol_seconds: float = 3600.0,
+    min_similarity: float = 0.5, ends_tol_seconds: float = 86400.0, min_shared: int = 2,
 ) -> List[Tuple[Market, Market, float]]:
     """Greedily match markets across two venues by title similarity + close end time.
 
-    Returns ``(market_a, market_b, similarity)`` candidates, best first. These are
-    CANDIDATES for a human to confirm resolve identically — matching titles does not
-    guarantee the same reference price / settlement rule, which is the whole risk.
+    Returns ``(market_a, market_b, similarity)`` candidates, best first. Requires at
+    least ``min_shared`` significant words in common (so a one-word overlap can't
+    score 1.0). These are CANDIDATES for a human to confirm resolve identically —
+    matching titles does not guarantee the same reference price / settlement rule,
+    which is the whole risk.
     """
     pairs: List[Tuple[Market, Market, float]] = []
     for ma in markets_a:
+        ta = normalize_title(ma.title)
         for mb in markets_b:
             if not _ends_close(ma.ends_at, mb.ends_at, ends_tol_seconds):
+                continue
+            shared = ta & normalize_title(mb.title)
+            if len(shared) < min_shared:
                 continue
             sim = title_similarity(ma.title, mb.title)
             if sim >= min_similarity:
