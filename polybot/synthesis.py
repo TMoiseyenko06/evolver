@@ -326,6 +326,46 @@ def fetch_orderbook(client: "SynthesisClient", token_id: str) -> Any:
     return resp.json()
 
 
+def fetch_orderbooks(client: "SynthesisClient", token_ids: List[str]) -> Any:
+    """Batch-fetch orderbooks for many token_ids at once (venue-agnostic endpoint)."""
+    resp = requests.post(
+        f"{client.base_url}/api/v1/markets/orderbooks",
+        json=[str(t) for t in token_ids], headers=client._headers(), timeout=client.timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def list_markets(
+    client: "SynthesisClient", venue: Optional[str] = None, limit: int = 250,
+    offset: int = 0, sort: str = "volume", order: str = "DESC",
+    min_ends_at: Optional[str] = None, max_ends_at: Optional[str] = None,
+    tags: Optional[str] = None, live: Optional[bool] = None,
+) -> Any:
+    """GET /api/v1/markets — events (with nested markets) ACROSS venues.
+
+    ``venue`` filters to ``polymarket`` or ``kalshi`` (None = both). This is the
+    unified listing that lets us scan the entire market, not just one title.
+    """
+    params: Dict[str, Any] = {"limit": limit, "offset": offset, "sort": sort, "order": order}
+    if venue:
+        params["venue"] = venue
+    if min_ends_at:
+        params["min_ends_at"] = min_ends_at
+    if max_ends_at:
+        params["max_ends_at"] = max_ends_at
+    if tags:
+        params["tags"] = tags
+    if live is not None:
+        params["live"] = str(bool(live)).lower()
+    resp = requests.get(
+        f"{client.base_url}/api/v1/markets", params=params,
+        headers=client._headers(), timeout=client.timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_market(client: "SynthesisClient", condition_id: str) -> Any:
     resp = requests.get(
         f"{client.base_url}/api/v1/polymarket/market/{condition_id}",
