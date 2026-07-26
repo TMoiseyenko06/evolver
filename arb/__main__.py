@@ -18,7 +18,8 @@ from typing import List
 
 from polybot.synthesis import SynthesisClient
 
-from . import paper, scan
+from . import match as matcher
+from . import detect, paper, scan
 from .model import ArbOpportunity
 
 try:  # reuse the evolver .env loader if present (same repo)
@@ -72,6 +73,51 @@ def cmd_cross(args) -> int:
               "markets above are truly the same question before trusting the edge.")
     else:
         print("(no cross-venue arbs found among matched events)")
+    return 0
+
+
+def _llm():
+    """Build an OpenRouter client from env, or None if no key / import fails."""
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        return None
+    try:
+        from evolver.openrouter import OpenRouterClient
+        return OpenRouterClient(
+            api_key=key,
+            model=os.environ.get("EVOLVER_MODEL", "anthropic/claude-opus-4.8"),
+            base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def cmd_match(args) -> int:
+    """Match the SAME event across Polymarket & Kalshi (semantic/LLM), show any spread."""
+    llm = None if args.no_llm else _llm()
+    if llm is None and not args.no_llm:
+        print("(no OPENROUTER_API_KEY — falling back to fuzzy, UNCONFIRMED matches)\n", file=sys.stderr)
+    matches = matcher.match_venues(_client(), llm, target=args.target, min_shared=args.min_shared,
+                                   max_pairs=args.max_pairs, min_confidence=args.min_confidence)
+    print(f"\n{len(matches)} matched event(s):\n")
+    # Fetch books once for all matched markets, then compute the cross-venue spread.
+    mkts = [m.poly for m in matches] + [m.kalshi for m in matches]
+    books = scan.fetch_books(_client(), [t for m in mkts for t in m.token_ids])
+    detect.apply_orderbooks(mkts, books, realistic=True)
+    for em in matches[: args.top]:
+        opp = detect.cross_venue_arb([em.poly, em.kalshi], realistic=True)
+        edge = f"edge {opp.edge*100:+.2f}%/set" if opp else "no book / no spread"
+        print(f"~{em.confidence:.0%}  {edge}")
+        print(f"    POLY  : {em.poly.title!r}  ({'/'.join(q.outcome for q in em.poly.quotes)})")
+        print(f"    KALSHI: {em.kalshi.title!r}  ({'/'.join(q.outcome for q in em.kalshi.quotes)})")
+        if em.reason:
+            print(f"    why: {em.reason}")
+        print()
+    if not matches:
+        print("(no matches — try --min-shared 1 or a larger --target)")
+    else:
+        print("NOTE: confirm settlement equivalence (same reference source/time) before\n"
+              "trading any pair — the LLM checks this but is not infallible.")
     return 0
 
 
@@ -153,6 +199,15 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--max-markets", type=int, default=1000)
     pf.add_argument("--top", type=int, default=25)
     pf.set_defaults(func=cmd_field)
+
+    pm = sub.add_parser("match", help="match the SAME event across Polymarket & Kalshi (semantic/LLM)")
+    pm.add_argument("--target", type=int, default=3000, help="markets to pull per venue")
+    pm.add_argument("--min-shared", type=int, default=2, help="min shared title words to consider a pair")
+    pm.add_argument("--max-pairs", type=int, default=1500, help="cap candidate pairs sent to the LLM")
+    pm.add_argument("--min-confidence", type=float, default=0.6)
+    pm.add_argument("--no-llm", action="store_true", help="fuzzy only, skip LLM confirmation")
+    pm.add_argument("--top", type=int, default=40)
+    pm.set_defaults(func=cmd_match)
 
     ps = sub.add_parser("sample", help="dump how a venue names its markets (for matching design)")
     ps.add_argument("--venue", choices=["polymarket", "kalshi"], default="polymarket")

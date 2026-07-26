@@ -32,7 +32,11 @@ python -m arb intra --venue kalshi
 # multi-outcome field arb: buy every outcome of a one-winner event for < $1
 python -m arb field --venue kalshi --min-edge 0.005
 
-# same event priced apart across Polymarket & Kalshi
+# MATCH the same event across venues despite different names (semantic/LLM), show spread
+python -m arb match --target 3000              # needs OPENROUTER_API_KEY for LLM confirmation
+python -m arb match --no-llm --min-shared 1    # fuzzy only (unconfirmed candidates)
+
+# same event priced apart across Polymarket & Kalshi (uses the simple built-in matcher)
 python -m arb cross --min-similarity 0.6 --min-edge 0.005
 
 # inspect how a venue names its markets (to design matching)
@@ -75,6 +79,26 @@ detector guards this with the `Σ mid ≈ 1` completeness heuristic, but on real
 you must confirm no outcome is missing. Cross-venue arb is **not** paper-traded (its
 P&L depends on both venues resolving identically, which we can't simulate yet) —
 `cross` still reports those candidates.
+
+## Cross-venue event matching (`match`)
+
+The venues name the same event completely differently — "Will Trump win the 2024
+election?" vs "Presidential winner → Trump" — so `cross`'s word-overlap matcher
+misses most real pairs. `match` solves this properly (`arb/match.py`):
+
+1. **Fetch broadly** — thousands of live markets per venue (paginated, not just
+   top-volume), so politics/crypto/econ overlaps are actually in the set.
+2. **Block** — an inverted token index proposes candidate pairs sharing ≥`--min-shared`
+   significant words (cheap recall; avoids N×M LLM calls).
+3. **Confirm semantically** — an LLM decides, per pair, whether they resolve the SAME
+   event under the SAME criteria and maps the outcomes. It bridges the wording gap
+   **and rejects pairs whose settlement differs** (different price source/window/line)
+   — the basis-risk killer. Needs `OPENROUTER_API_KEY`; `--no-llm` falls back to fuzzy
+   (unconfirmed) candidates.
+
+For each confirmed match it fetches books and prints the realistic cross-venue spread.
+Still confirm settlement equivalence yourself before trading — the LLM is strict but
+not infallible.
 
 ## Field (multi-outcome) arb — how it's detected
 

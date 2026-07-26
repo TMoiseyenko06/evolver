@@ -229,3 +229,66 @@ def test_match_events_excludes_far_apart_end_times():
     kal = detect.parse_markets(_markets_payload("kalshi", "k", "Same event today?", 0.5, 0.5, ends="1700100000"))
     # ~27h apart, tol 1h -> excluded
     assert detect.match_events(poly, kal, min_similarity=0.4, ends_tol_seconds=3600) == []
+
+
+# --------------------------------------------------------------------------- #
+# Cross-venue semantic matching
+# --------------------------------------------------------------------------- #
+def _mkt(venue, cid, title):
+    return detect.parse_markets(_markets_payload(venue, cid, title, 0.5, 0.5))[0]
+
+
+def test_candidate_pairs_blocks_on_shared_words():
+    from arb import match
+    poly = [_mkt("polymarket", "p1", "Will the Lakers win the 2025 NBA title?"),
+            _mkt("polymarket", "p2", "Will it rain in Seattle tomorrow?")]
+    kalshi = [_mkt("kalshi", "k1", "Lakers 2025 championship winner"),
+              _mkt("kalshi", "k2", "Fed rate decision September")]
+    pairs = match.candidate_pairs(poly, kalshi, min_shared=2)
+    # Only the Lakers pair shares >=2 significant words.
+    assert len(pairs) == 1
+    assert pairs[0][0].market_id == "p1" and pairs[0][1].market_id == "k1"
+
+
+def test_parse_match_response_tolerant():
+    from arb import match
+    txt = 'sure!\n[{"i":0,"match":true,"confidence":0.9,"map":{"Yes":"Yes"},"reason":"same"}]\ndone'
+    out = match.parse_match_response(txt)
+    assert out == [{"i": 0, "match": True, "confidence": 0.9, "map": {"Yes": "Yes"}, "reason": "same"}]
+    assert match.parse_match_response("no json here") == []
+
+
+class _FakeLLM:
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = 0
+
+    def chat(self, system, user):
+        self.calls += 1
+        return self.reply
+
+
+def test_llm_confirm_keeps_confident_matches():
+    from arb import match
+    poly = [_mkt("polymarket", "p1", "Lakers win title?"),
+            _mkt("polymarket", "p2", "Bitcoin above 100k?")]
+    kalshi = [_mkt("kalshi", "k1", "Lakers championship"),
+              _mkt("kalshi", "k2", "BTC over 100000 at CME close")]
+    pairs = [(poly[0], kalshi[0], 0.8, 2), (poly[1], kalshi[1], 0.7, 2)]
+    # LLM confirms pair 0, rejects pair 1 (different settlement source).
+    llm = _FakeLLM('[{"i":0,"match":true,"confidence":0.85,"map":{"Yes":"Yes","No":"No"}},'
+                   '{"i":1,"match":false,"confidence":0.9,"reason":"CME vs unknown source"}]')
+    matches = match.llm_confirm(llm, pairs, batch=15, min_confidence=0.6)
+    assert len(matches) == 1
+    assert matches[0].poly.market_id == "p1" and matches[0].confidence == 0.85
+    assert llm.calls == 1
+
+
+def test_match_venues_fuzzy_fallback_without_llm(monkeypatch):
+    from arb import match
+    poly = [_mkt("polymarket", "p1", "Lakers win the 2025 title")]
+    kalshi = [_mkt("kalshi", "k1", "Lakers 2025 title winner")]
+    monkeypatch.setattr(match, "fetch_broad",
+                        lambda client, venue, target=3000: poly if venue == "polymarket" else kalshi)
+    out = match.match_venues(client=None, llm=None)
+    assert len(out) == 1 and "fuzzy" in out[0].reason
