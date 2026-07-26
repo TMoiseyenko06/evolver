@@ -19,9 +19,16 @@ class Quote:
     outcome: str                       # canonical label, e.g. "Yes"/"No"/"Up"/"Down"
     token_id: str
     mid: float = 0.0                   # left/right_price from the listing (indicative)
-    ask: Optional[float] = None        # best (lowest) ask — the price to BUY this outcome
+    ask: Optional[float] = None        # best (lowest) DISPLAYED ask
     ask_size: float = 0.0              # shares available at/near the best ask
     bid: Optional[float] = None        # best (highest) bid
+    ask_exec: Optional[float] = None   # EXECUTABLE ask after cross-book/no-arb correction
+
+    def eff_ask(self, realistic: bool) -> Optional[float]:
+        """The price a buyer actually pays: executable (realistic) or displayed."""
+        if realistic and self.ask_exec is not None:
+            return self.ask_exec
+        return self.ask
 
 
 @dataclass

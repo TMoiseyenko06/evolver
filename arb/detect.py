@@ -12,9 +12,15 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from polybot import synthesis
+from evolver.engine import executable_price  # reuse the exact realistic-fill model
 
 from . import fees as feemod
 from .model import ArbLeg, ArbOpportunity, Market, Quote
+
+# Fallback slippage curve params (only used when a complement bid is absent); the
+# primary correction is the no-arb floor from the sibling outcome's bid.
+SLIPPAGE_COEFF = 0.55
+SLIPPAGE_EXP = 2.0
 
 # --------------------------------------------------------------------------- #
 # Normalization: unified /markets response -> Market objects
@@ -65,8 +71,16 @@ def _parse_market(m: Dict[str, Any], venue: str, event_id: str) -> Optional[Mark
     )
 
 
-def apply_orderbooks(markets: List[Market], books_by_token: Dict[str, dict]) -> None:
-    """Fill each quote's ``ask``/``ask_size``/``bid`` from fetched order books (in place)."""
+def apply_orderbooks(markets: List[Market], books_by_token: Dict[str, dict],
+                     realistic: bool = True) -> None:
+    """Fill each quote's ``ask``/``ask_size``/``bid`` from fetched order books (in place).
+
+    When ``realistic``, also compute the EXECUTABLE ask (``ask_exec``) using the same
+    cross-book no-arb model as the evolver: a displayed ask can't execute below
+    ``1 - sibling_best_bid`` (the other outcome of the same market). This stops a
+    phantom cheap ask from manufacturing a fake arb — the whole point of doing this
+    on realistic data.
+    """
     for market in markets:
         for q in market.quotes:
             book = books_by_token.get(q.token_id)
@@ -78,14 +92,25 @@ def apply_orderbooks(markets: List[Market], books_by_token: Dict[str, dict]) -> 
                 q.ask, q.ask_size = float(asks[0][0]), float(asks[0][1])
             if bids:
                 q.bid = float(bids[0][0])
+        if realistic and len(market.quotes) == 2:
+            a, b = market.quotes
+            _set_exec(a, b)  # a's executable ask is floored by b's (complement) bid
+            _set_exec(b, a)
+
+
+def _set_exec(q: Quote, sibling: Quote) -> None:
+    if q.ask is None or q.ask <= 0:
+        return
+    comp_bids = [(sibling.bid, sibling.ask_size or 1.0)] if sibling.bid else None
+    q.ask_exec = executable_price(q.ask, comp_bids, SLIPPAGE_COEFF, SLIPPAGE_EXP)
 
 
 # --------------------------------------------------------------------------- #
 # Core arb math
 # --------------------------------------------------------------------------- #
-def _leg(market: Market, q: Quote) -> ArbLeg:
+def _leg(market: Market, q: Quote, realistic: bool) -> ArbLeg:
     return ArbLeg(venue=market.venue, market_id=market.market_id, title=market.title,
-                  outcome=q.outcome, token_id=q.token_id, ask=float(q.ask or 0.0),
+                  outcome=q.outcome, token_id=q.token_id, ask=float(q.eff_ask(realistic) or 0.0),
                   ask_size=float(q.ask_size or 0.0))
 
 
@@ -101,23 +126,33 @@ def _build(kind: str, title: str, leg_a: ArbLeg, leg_b: ArbLeg,
     )
 
 
-def intra_market_arb(market: Market, min_edge: float = 0.0) -> Optional[ArbOpportunity]:
-    """Both outcomes of ONE market for < $1 after fees. The cleanest, safest lock."""
+def intra_market_arb(market: Market, min_edge: float = 0.0,
+                     realistic: bool = True) -> Optional[ArbOpportunity]:
+    """Both outcomes of ONE market for < $1 after fees. The cleanest, safest lock.
+
+    With ``realistic``, uses executable asks — so a phantom cheap ask (whose
+    executable price is clamped up by the sibling's bid) won't fake an arb.
+    """
     if len(market.quotes) != 2:
         return None
     a, b = market.quotes
-    if a.ask is None or b.ask is None or a.ask <= 0 or b.ask <= 0:
+    if a.eff_ask(realistic) is None or b.eff_ask(realistic) is None:
         return None
-    opp = _build("intra", market.title, _leg(market, a), _leg(market, b), market.ends_at)
+    if a.eff_ask(realistic) <= 0 or b.eff_ask(realistic) <= 0:
+        return None
+    opp = _build("intra", market.title, _leg(market, a, realistic), _leg(market, b, realistic),
+                 market.ends_at)
     return opp if opp.edge > min_edge else None
 
 
-def cross_venue_arb(markets: List[Market], min_edge: float = 0.0) -> Optional[ArbOpportunity]:
+def cross_venue_arb(markets: List[Market], min_edge: float = 0.0,
+                    realistic: bool = True) -> Optional[ArbOpportunity]:
     """Best complementary lock across markets for the SAME event (>=1 venue).
 
-    Collects the cheapest ask for each of the two canonical outcomes across all
-    ``markets`` and forms the lock. Only auto-computes when the markets agree on the
-    outcome label set (e.g. both Yes/No), to avoid mis-mapping Up/Down↔Yes/No.
+    Collects the cheapest EXECUTABLE ask for each of the two canonical outcomes
+    across all ``markets`` and forms the lock. Only auto-computes when the markets
+    agree on the outcome label set (e.g. both Yes/No), to avoid mis-mapping
+    Up/Down↔Yes/No.
     """
     label_sets = {frozenset(q.outcome.lower() for q in m.quotes) for m in markets}
     if len(label_sets) != 1:
@@ -125,19 +160,20 @@ def cross_venue_arb(markets: List[Market], min_edge: float = 0.0) -> Optional[Ar
     labels = sorted(next(iter(label_sets)))
     if len(labels) != 2:
         return None
-    best: Dict[str, Tuple[Market, Quote]] = {}
+    best: Dict[str, Tuple[Market, Quote, float]] = {}
     for m in markets:
         for q in m.quotes:
-            if q.ask is None or q.ask <= 0:
+            price = q.eff_ask(realistic)
+            if price is None or price <= 0:
                 continue
             key = q.outcome.lower()
-            if key not in best or q.ask < best[key][1].ask:
-                best[key] = (m, q)
+            if key not in best or price < best[key][2]:
+                best[key] = (m, q, price)
     if labels[0] not in best or labels[1] not in best:
         return None
-    (m_a, q_a), (m_b, q_b) = best[labels[0]], best[labels[1]]
+    (m_a, q_a, _), (m_b, q_b, _) = best[labels[0]], best[labels[1]]
     kind = "intra" if m_a.market_id == m_b.market_id and m_a.venue == m_b.venue else "cross"
-    opp = _build(kind, m_a.title, _leg(m_a, q_a), _leg(m_b, q_b), m_a.ends_at)
+    opp = _build(kind, m_a.title, _leg(m_a, q_a, realistic), _leg(m_b, q_b, realistic), m_a.ends_at)
     return opp if opp.edge > min_edge else None
 
 

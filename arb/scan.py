@@ -67,13 +67,17 @@ def list_all(client: SynthesisClient, venue: str, max_markets: int = 1000,
 
 
 def scan_intra(client: SynthesisClient, venue: str, max_markets: int = 1000,
-               min_edge: float = 0.0) -> List[ArbOpportunity]:
-    """Scan a whole venue for single-market both-sides arbs (ask_A + ask_B < 1)."""
+               min_edge: float = 0.0, realistic: bool = True) -> List[ArbOpportunity]:
+    """Scan a whole venue for single-market both-sides arbs (ask_A + ask_B < 1).
+
+    With ``realistic`` (default), uses executable asks (cross-book no-arb model), so
+    phantom cheap asks don't manufacture arbs — the honest data the paper trader needs.
+    """
     markets = list_all(client, venue, max_markets)
     log.info("%s: %d live markets", venue, len(markets))
     books = fetch_books(client, [t for m in markets for t in m.token_ids])
-    detect.apply_orderbooks(markets, books)
-    opps = [o for m in markets if (o := detect.intra_market_arb(m, min_edge)) is not None]
+    detect.apply_orderbooks(markets, books, realistic=realistic)
+    opps = [o for m in markets if (o := detect.intra_market_arb(m, min_edge, realistic)) is not None]
     opps.sort(key=lambda o: o.edge, reverse=True)
     return opps
 

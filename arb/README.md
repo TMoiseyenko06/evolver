@@ -23,17 +23,46 @@ total (plus fees) is under $1, the difference is locked profit per set.
 ## Usage
 
 ```bash
-# both-sides arb within single markets, across a whole venue
+# both-sides arb within single markets, across a whole venue (realistic fills)
 python -m arb intra --venue polymarket --min-edge 0.005
 python -m arb intra --venue kalshi
 
 # same event priced apart across Polymarket & Kalshi
 python -m arb cross --min-similarity 0.6 --min-edge 0.005
+
+# PAPER-TRADE intra-market arb on a loop, realistic fills, cumulative P&L
+python -m arb paper --venue polymarket --bankroll 500 --min-edge 0.005 --interval 30
+python -m arb paper --venue both
 ```
 
 Needs `SYNTHESIS_API_KEY` (and optionally `SYNTHESIS_BASE_URL`, default
 `https://synthesis.trade`) in `.env` or the environment. `--min-edge 0.005` = 0.5%
 net edge per $1 set; `--top N` caps rows; `--max-markets` bounds how many to scan.
+
+## Realistic fills (same model as the evolver)
+
+Every scan and paper trade prices legs at the **executable** ask, not the displayed
+one, reusing `evolver.engine.executable_price`: a leg's ask can't fill below
+`1 − sibling_best_bid` (the other outcome of the same market). Displayed liquidity
+at cheap prices is largely phantom, so without this a 0.06 ask would manufacture a
+fake arb; the clamp lifts it to the real executable price and the fake arb
+disappears. `intra`/`cross`/`paper` use realistic fills by default.
+
+## Paper trading
+
+`python -m arb paper` scans on an interval and paper-buys any **intra-market** arb
+that clears the fee/edge bar on executable prices, sized to real book depth
+(`per_arb_cap` shares max), then realizes the locked P&L when the market matures.
+
+Intra-market arb is a guaranteed lock — buying `n` shares of both outcomes costs
+`net_cost·n` and pays exactly `n` at resolution (one side wins), so P&L = `n·edge`,
+no resolution lookup needed. The board tracks bankroll, deployed capital, open
+locked profit, realized P&L, and counts. It's an honest measurement of how much
+locked arb is actually capturable after realistic fills, fees, and depth — expect
+close to zero on efficient venues, which is itself the answer.
+
+Cross-venue arb is **not** paper-traded (its P&L depends on both venues resolving
+identically, which we can't simulate yet) — `cross` still reports those candidates.
 
 ## How it works
 

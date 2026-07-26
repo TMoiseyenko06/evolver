@@ -18,7 +18,7 @@ from typing import List
 
 from polybot.synthesis import SynthesisClient
 
-from . import scan
+from . import paper, scan
 from .model import ArbOpportunity
 
 try:  # reuse the evolver .env loader if present (same repo)
@@ -72,6 +72,20 @@ def cmd_cross(args) -> int:
     return 0
 
 
+def cmd_paper(args) -> int:
+    venues = ["polymarket", "kalshi"] if args.venue == "both" else [args.venue]
+    print(f"Paper-trading intra-market arb on {', '.join(venues)} with REALISTIC fills.\n"
+          f"bankroll ${args.bankroll:.0f} · min-edge {args.min_edge*100:.2f}% · "
+          f"scan every {args.interval:.0f}s · Ctrl-C to stop.\n")
+    try:
+        paper.run_paper(_client(), venues, bankroll=args.bankroll, interval=args.interval,
+                        min_edge=args.min_edge, per_arb_cap=args.per_arb_cap,
+                        max_markets=args.max_markets)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="arb", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -89,6 +103,15 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--max-markets", type=int, default=1000)
     pc.add_argument("--top", type=int, default=25)
     pc.set_defaults(func=cmd_cross)
+
+    pp = sub.add_parser("paper", help="paper-trade intra-market arb with realistic fills")
+    pp.add_argument("--venue", choices=["polymarket", "kalshi", "both"], default="polymarket")
+    pp.add_argument("--bankroll", type=float, default=500.0)
+    pp.add_argument("--min-edge", type=float, default=0.005, help="min executable edge/set (0.005=0.5%%)")
+    pp.add_argument("--interval", type=float, default=30.0, help="seconds between scans")
+    pp.add_argument("--per-arb-cap", type=float, default=200.0, help="max shares per single arb")
+    pp.add_argument("--max-markets", type=int, default=1000)
+    pp.set_defaults(func=cmd_paper)
     return p
 
 
