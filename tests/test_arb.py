@@ -292,3 +292,30 @@ def test_match_venues_fuzzy_fallback_without_llm(monkeypatch):
                         lambda client, venue, target=3000: poly if venue == "polymarket" else kalshi)
     out = match.match_venues(client=None, llm=None)
     assert len(out) == 1 and "fuzzy" in out[0].reason
+
+
+# --------------------------------------------------------------------------- #
+# IDF-weighted / Levenshtein matching (distinguishes outcomes of the same event)
+# --------------------------------------------------------------------------- #
+def test_levenshtein_and_ratio():
+    assert detect.levenshtein("warsh", "warsh") == 0
+    assert detect.levenshtein("powell", "powel") == 1
+    assert detect.lev_ratio("Kevin Warsh", "kevin warsh") == pytest.approx(1.0)
+    assert detect.lev_ratio("Warsh", "Powell") < 0.5
+
+
+def test_idf_matching_does_not_pair_different_candidates():
+    poly = [_mkt("polymarket", "p_warsh", "Fed Chair - Kevin Warsh"),
+            _mkt("polymarket", "p_powell", "Fed Chair - Jerome Powell")]
+    kalshi = [_mkt("kalshi", "k_warsh", "Fed Chair Kevin Warsh"),
+              _mkt("kalshi", "k_powell", "Fed Chair Jerome Powell")]
+    filler = [_mkt("kalshi", f"f{i}", "Fed Chair Candidate nominee") for i in range(10)]
+    idf = detect.token_idf(poly + kalshi + filler)
+    pairs = detect.candidate_pairs(poly, kalshi + filler, min_shared=2, idf=idf)
+    got = {(a.market_id, b.market_id) for a, b, _, _ in pairs}
+    # Correct same-name pairs are found...
+    assert ("p_warsh", "k_warsh") in got
+    assert ("p_powell", "k_powell") in got
+    # ...but different candidates of the same event are NOT paired (only shared "fed/chair").
+    assert ("p_warsh", "k_powell") not in got
+    assert ("p_powell", "k_warsh") not in got

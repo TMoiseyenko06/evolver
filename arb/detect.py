@@ -8,6 +8,7 @@ set is guaranteed to pay exactly $1 at resolution.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -270,34 +271,92 @@ def title_similarity(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
+def token_idf(markets: List[Market]) -> Dict[str, float]:
+    """Inverse document frequency per title token: rare tokens (a candidate's NAME)
+    score high, common event words ('fed', 'chair', '2026', 'winner') score low."""
+    df: Counter = Counter()
+    for m in markets:
+        for tok in normalize_title(m.title):
+            df[tok] += 1
+    n = max(1, len(markets))
+    return {tok: math.log(1.0 + n / c) for tok, c in df.items()}
+
+
+def levenshtein(a: str, b: str) -> int:
+    """Edit distance (pure Python) for near-identical name matching."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def lev_ratio(a: str, b: str) -> float:
+    """Levenshtein similarity in [0, 1] on two strings."""
+    a, b = (a or "").lower(), (b or "").lower()
+    if not a and not b:
+        return 1.0
+    return 1.0 - levenshtein(a, b) / max(len(a), len(b), 1)
+
+
 def candidate_pairs(
     markets_a: List[Market], markets_b: List[Market], min_shared: int = 2, max_pairs: int = 3000,
+    idf: Optional[Dict[str, float]] = None, min_token_idf: Optional[float] = None,
 ) -> List[Tuple[Market, Market, float, int]]:
-    """Block plausible cross-venue pairs via shared title words, using an inverted
-    index so it scales to the FULL market universe (nested matching does not).
+    """Block plausible cross-venue pairs by shared DISTINCTIVE title words + Levenshtein.
 
-    Returns ``(market_a, market_b, overlap_score, shared_count)`` best first — a cheap
-    recall step; confirm precision with the arb spread and/or the LLM matcher.
+    Scored by IDF-weighted overlap (so a shared candidate NAME drives the match, not
+    shared event words like 'fed chair'), blended with a Levenshtein title similarity
+    for spelling/spacing variants. ``min_token_idf`` requires at least one shared token
+    that distinctive, which stops different outcomes of the SAME event (Warsh vs Powell)
+    from matching just because they share the event words. Uses an inverted index so it
+    scales to the full universe. Returns ``(a, b, score, shared_count)`` best first.
     """
-    index: Dict[str, List[int]] = defaultdict(list)
+    idf = idf if idf is not None else token_idf(markets_a + markets_b)
     btoks = [normalize_title(m.title) for m in markets_b]
+    atoks_all = [normalize_title(m.title) for m in markets_a]
+    # "Common" tokens (event words like fed/chair/2026) appear in many markets; a valid
+    # match must share at least one token that is NOT merely common — the distinctive
+    # outcome (a candidate's name). This is what separates Warsh vs Powell.
+    df: Counter = Counter()
+    n_all = len(markets_a) + len(markets_b)
+    for toks in atoks_all + btoks:
+        for tok in set(toks):
+            df[tok] += 1
+    common_cut = max(5, 0.005 * n_all)
+    common = {tok for tok, c in df.items() if c > common_cut}
+
+    index: Dict[str, List[int]] = defaultdict(list)
     for j, toks in enumerate(btoks):
         for tok in toks:
             index[tok].append(j)
     pairs: List[Tuple[Market, Market, float, int]] = []
-    for ma in markets_a:
-        atoks = normalize_title(ma.title)
+    for ma, atoks in zip(markets_a, atoks_all):
         if not atoks:
             continue
-        counts: Counter = Counter()
+        shared_by_j: Dict[int, List[str]] = defaultdict(list)
         for tok in atoks:
             for j in index.get(tok, ()):
-                counts[j] += 1
-        for j, shared in counts.items():
-            if shared < min_shared:
+                shared_by_j[j].append(tok)
+        a_idf = sum(idf.get(t, 0.0) for t in atoks) or 1.0
+        for j, shared in shared_by_j.items():
+            if len(shared) < min_shared:
                 continue
-            denom = min(len(atoks), len(btoks[j])) or 1
-            pairs.append((ma, markets_b[j], shared / denom, shared))
+            if all(t in common for t in shared):
+                continue  # only common/event words shared -> different outcome
+            if min_token_idf is not None and max(idf.get(t, 0.0) for t in shared) < min_token_idf:
+                continue
+            weighted = sum(idf.get(t, 0.0) for t in shared) / a_idf
+            score = max(weighted, lev_ratio(ma.title, markets_b[j].title))
+            pairs.append((ma, markets_b[j], score, len(shared)))
     pairs.sort(key=lambda t: (t[2], t[3]), reverse=True)
     return pairs[:max_pairs]
 
