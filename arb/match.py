@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -45,40 +44,17 @@ class EventMatch:
 # --------------------------------------------------------------------------- #
 # Fetch + block
 # --------------------------------------------------------------------------- #
-def fetch_broad(client: SynthesisClient, venue: str, target: int = 3000) -> List[Market]:
-    """Pull a broad set of live markets from a venue (paginated, across categories)."""
+def fetch_broad(client: SynthesisClient, venue: str, target: int = 20000) -> List[Market]:
+    """Pull the full market universe from a venue (paginated to exhaustion).
+
+    Arbs live in thin, low-volume markets, so we pull everything rather than the
+    high-volume top — see ``scan.list_all``.
+    """
     return scan.list_all(client, venue, max_markets=target)
 
 
-def candidate_pairs(
-    poly: List[Market], kalshi: List[Market], min_shared: int = 2, max_pairs: int = 1500,
-) -> List[Tuple[Market, Market, float, int]]:
-    """Block plausible cross-venue pairs via shared significant title words.
-
-    Returns ``(poly_market, kalshi_market, overlap_score, shared_count)`` sorted best
-    first. This is a cheap recall step — precision comes from the LLM confirmation.
-    """
-    index: Dict[str, List[int]] = defaultdict(list)
-    ktoks = [detect.normalize_title(m.title) for m in kalshi]
-    for j, toks in enumerate(ktoks):
-        for tok in toks:
-            index[tok].append(j)
-    pairs: List[Tuple[Market, Market, float, int]] = []
-    for pm in poly:
-        ptoks = detect.normalize_title(pm.title)
-        if not ptoks:
-            continue
-        counts: Counter = Counter()
-        for tok in ptoks:
-            for j in index.get(tok, ()):
-                counts[j] += 1
-        for j, shared in counts.items():
-            if shared < min_shared:
-                continue
-            denom = min(len(ptoks), len(ktoks[j])) or 1
-            pairs.append((pm, kalshi[j], shared / denom, shared))
-    pairs.sort(key=lambda t: (t[2], t[3]), reverse=True)
-    return pairs[:max_pairs]
+# The inverted-index blocking lives in detect (shared with scan_cross); re-export it.
+candidate_pairs = detect.candidate_pairs
 
 
 # --------------------------------------------------------------------------- #
@@ -154,8 +130,8 @@ def llm_confirm(llm, pairs: List[Tuple[Market, Market, float, int]],
 
 
 def match_venues(
-    client: SynthesisClient, llm=None, target: int = 3000, min_shared: int = 2,
-    max_pairs: int = 1500, min_confidence: float = 0.6,
+    client: SynthesisClient, llm=None, target: int = 20000, min_shared: int = 2,
+    max_pairs: int = 3000, min_confidence: float = 0.6,
 ) -> List[EventMatch]:
     """End-to-end: fetch both venues, block, and (if an LLM is given) confirm matches."""
     poly = fetch_broad(client, "polymarket", target)

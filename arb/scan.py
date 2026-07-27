@@ -8,7 +8,7 @@ arbs exist after fees, which is the prerequisite for ever risking capital.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from polybot import synthesis
 from polybot.synthesis import SynthesisClient
@@ -45,9 +45,15 @@ def fetch_books(client: SynthesisClient, token_ids: List[str], batch: int = 100)
     return books
 
 
-def list_all(client: SynthesisClient, venue: str, max_markets: int = 1000,
-             page: int = 250, live: bool = True) -> List[Market]:
-    """Page through the unified markets endpoint for one venue."""
+def list_all(client: SynthesisClient, venue: str, max_markets: int = 20000,
+             page: int = 250, live: Optional[bool] = None) -> List[Market]:
+    """Page through the unified markets endpoint for one venue, to exhaustion.
+
+    Arbs live in THIN, low-volume markets (a mispriced $3 market is where the edge
+    is), so we page all the way down the tail rather than stopping at the
+    high-volume top. ``live`` defaults to None (no in-play filter) so future-dated
+    markets — elections, year-end crypto — are included.
+    """
     markets: List[Market] = []
     offset = 0
     while len(markets) < max_markets:
@@ -57,11 +63,10 @@ def list_all(client: SynthesisClient, venue: str, max_markets: int = 1000,
         except Exception as exc:  # noqa: BLE001
             log.warning("list_markets(%s, offset=%d) failed: %s", venue, offset, exc)
             break
-        batch = [m for m in detect.parse_markets(payload, venue_hint=venue) if not m.resolved]
-        markets.extend(batch)
-        got = len(detect.parse_markets(payload, venue_hint=venue))
+        parsed = detect.parse_markets(payload, venue_hint=venue)
+        markets.extend(m for m in parsed if not m.resolved)
         offset += page
-        if got == 0:
+        if len(parsed) < page:  # short page => end of the listing
             break
     return markets[:max_markets]
 
@@ -101,27 +106,32 @@ def scan_field(client: SynthesisClient, venue: str, max_markets: int = 1000,
     return opps
 
 
-def scan_cross(client: SynthesisClient, max_markets: int = 1000, min_similarity: float = 0.6,
-               min_edge: float = 0.0) -> List[Tuple[ArbOpportunity, float]]:
-    """Match events across Polymarket+Kalshi and scan each pair for a cross-venue lock.
+def scan_cross(client: SynthesisClient, max_markets: int = 20000, min_shared: int = 2,
+               min_edge: float = 0.0, max_pairs: int = 4000, min_similarity: float = 0.0,
+               ) -> List[Tuple[ArbOpportunity, float]]:
+    """Scan the FULL universe for cross-venue locks (Kalshi YES + Polymarket NO < $1).
 
-    Returns ``(opportunity, title_similarity)`` so a human can gauge how confident
-    the event-match is before trusting the arb.
+    Fetches both venues to exhaustion (arbs hide in thin, low-volume markets), blocks
+    plausible pairs with an inverted index (scales), fetches books only for those
+    pairs, and reports pairs with a real executable spread. Returns
+    ``(opportunity, block_score)`` — the block score is a rough match confidence;
+    confirm the two markets are truly the same question before trading.
     """
     poly = list_all(client, "polymarket", max_markets)
     kal = list_all(client, "kalshi", max_markets)
-    log.info("matching %d polymarket vs %d kalshi markets", len(poly), len(kal))
-    pairs = detect.match_events(poly, kal, min_similarity)
-    log.info("%d candidate event matches (sim >= %.2f)", len(pairs), min_similarity)
+    log.info("scanning %d polymarket vs %d kalshi markets", len(poly), len(kal))
+    pairs = detect.candidate_pairs(poly, kal, min_shared=min_shared, max_pairs=max_pairs)
+    pairs = [p for p in pairs if p[2] >= min_similarity]
+    log.info("%d candidate pairs (>=%d shared words)", len(pairs), min_shared)
     tokens: List[str] = []
-    for ma, mb, _ in pairs:
+    for ma, mb, _, _ in pairs:
         tokens.extend(ma.token_ids + mb.token_ids)
     books = fetch_books(client, tokens)
     detect.apply_orderbooks(poly + kal, books)
     results: List[Tuple[ArbOpportunity, float]] = []
-    for ma, mb, sim in pairs:
+    for ma, mb, score, _ in pairs:
         opp = detect.cross_venue_arb([ma, mb], min_edge)
         if opp is not None and opp.kind == "cross":
-            results.append((opp, sim))
+            results.append((opp, score))
     results.sort(key=lambda r: r[0].edge, reverse=True)
     return results

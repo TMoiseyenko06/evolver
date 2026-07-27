@@ -9,6 +9,7 @@ set is guaranteed to pay exactly $1 at resolution.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from polybot import synthesis
@@ -267,6 +268,38 @@ def title_similarity(a: str, b: str) -> float:
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / min(len(ta), len(tb))
+
+
+def candidate_pairs(
+    markets_a: List[Market], markets_b: List[Market], min_shared: int = 2, max_pairs: int = 3000,
+) -> List[Tuple[Market, Market, float, int]]:
+    """Block plausible cross-venue pairs via shared title words, using an inverted
+    index so it scales to the FULL market universe (nested matching does not).
+
+    Returns ``(market_a, market_b, overlap_score, shared_count)`` best first — a cheap
+    recall step; confirm precision with the arb spread and/or the LLM matcher.
+    """
+    index: Dict[str, List[int]] = defaultdict(list)
+    btoks = [normalize_title(m.title) for m in markets_b]
+    for j, toks in enumerate(btoks):
+        for tok in toks:
+            index[tok].append(j)
+    pairs: List[Tuple[Market, Market, float, int]] = []
+    for ma in markets_a:
+        atoks = normalize_title(ma.title)
+        if not atoks:
+            continue
+        counts: Counter = Counter()
+        for tok in atoks:
+            for j in index.get(tok, ()):
+                counts[j] += 1
+        for j, shared in counts.items():
+            if shared < min_shared:
+                continue
+            denom = min(len(atoks), len(btoks[j])) or 1
+            pairs.append((ma, markets_b[j], shared / denom, shared))
+    pairs.sort(key=lambda t: (t[2], t[3]), reverse=True)
+    return pairs[:max_pairs]
 
 
 def match_events(

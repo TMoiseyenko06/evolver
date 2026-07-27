@@ -63,7 +63,8 @@ def cmd_intra(args) -> int:
 
 
 def cmd_cross(args) -> int:
-    results = scan.scan_cross(_client(), args.max_markets, args.min_similarity, args.min_edge)
+    results = scan.scan_cross(_client(), max_markets=args.max_markets, min_shared=args.min_shared,
+                              min_edge=args.min_edge)
     print(f"\ncross-venue: {len(results)} candidate arb(s) with edge > {args.min_edge*100:.2f}%\n")
     for o, sim in results[: args.top]:
         print(_fmt(o, sim) + "\n")
@@ -177,10 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     pi.set_defaults(func=cmd_intra)
 
     pc = sub.add_parser("cross", help="same event priced apart across Polymarket & Kalshi")
-    pc.add_argument("--min-edge", type=float, default=0.0)
-    pc.add_argument("--min-similarity", type=float, default=0.6, help="title-match threshold 0-1")
-    pc.add_argument("--max-markets", type=int, default=1000)
-    pc.add_argument("--top", type=int, default=25)
+    pc.add_argument("--min-edge", type=float, default=0.0, help="min net edge/set (0.005=0.5%%)")
+    pc.add_argument("--min-shared", type=int, default=2, help="min shared title words to pair markets")
+    pc.add_argument("--max-markets", type=int, default=20000, help="markets to pull per venue (full universe)")
+    pc.add_argument("--top", type=int, default=40)
     pc.set_defaults(func=cmd_cross)
 
     pp = sub.add_parser("paper", help="paper-trade intra-market arb with realistic fills")
