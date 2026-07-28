@@ -118,7 +118,11 @@ class LoadedStrategy:
         if result is None:
             return None
         if isinstance(result, dict) and result.get("side") in ("Up", "Down"):
-            return {"side": result["side"]}
+            action = {"side": result["side"]}
+            lim = result.get("limit")
+            if isinstance(lim, (int, float)) and not isinstance(lim, bool) and 0.0 < lim <= 1.0:
+                action["limit"] = float(lim)  # optional LIMIT price cap
+            return action
         # Malformed return value counts as a failure — the contract was violated.
         self._register_failure(f"invalid decide() return: {result!r}", max_failures)
         return None

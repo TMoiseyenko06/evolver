@@ -22,26 +22,43 @@ from .models import Stats, WindowData
 from .sandbox import StrategyTimeout, compile_strategy, run_with_timeout
 
 
-def _first_action(instance, window: WindowData, config: Config) -> Optional[dict]:
-    """Replay one window; return the first {"side": ...} entered, or None (pass)."""
+def _simulate_entry(instance, window: WindowData, config: Config):
+    """Replay one window exactly like the live loop: the first poll where the strategy
+    wants a side AND the fill succeeds (limit met, if any) is the entry.
+
+    Returns ``(side, fill)`` or None (never filled -> a pass). Mirroring ``run_window``
+    keeps replay deterministic under limit orders — a resting limit fills at the first
+    poll its price is offered, not necessarily the poll the strategy first asked.
+    """
     for snap in window.polls:
         ctx = Ctx.from_snapshot(snap)
         try:
             result = run_with_timeout(instance.decide, (ctx,), config.decide_timeout_seconds)
         except (StrategyTimeout, BaseException):  # noqa: BLE001 — untrusted code
             continue
-        if isinstance(result, dict) and result.get("side") in ("Up", "Down"):
-            return {"side": result["side"], "poll_index": snap.poll_index}
+        if not (isinstance(result, dict) and result.get("side") in ("Up", "Down")):
+            continue
+        side = result["side"]
+        lim = result.get("limit")
+        limit = float(lim) if isinstance(lim, (int, float)) and not isinstance(lim, bool) \
+            and 0.0 < lim <= 1.0 else None
+        asks = snap.books.get(side, {}).get("asks", [])
+        other = "Down" if side == "Up" else "Up"
+        comp_bids = snap.books.get(other, {}).get("bids", []) if config.use_cross_book_fill else None
+        fill = simulate_fill(side, asks, config.stake, comp_bids,
+                             config.slippage_coeff, config.slippage_exp, limit=limit)
+        if fill is not None:
+            return side, fill
     return None
 
 
 def action_vector(source: str, windows: List[WindowData], config: Config) -> List[Optional[str]]:
-    """Per-window entered side (or None), used for near-duplicate detection."""
+    """Per-window FILLED side (or None), used for near-duplicate detection."""
     instance = compile_strategy(source, config.allowed_imports)
     out: List[Optional[str]] = []
     for w in windows:
-        act = _first_action(instance, w, config)
-        out.append(act["side"] if act else None)
+        entry = _simulate_entry(instance, w, config)
+        out.append(entry[0] if entry else None)
     return out
 
 
@@ -79,21 +96,11 @@ def replay_strategy(source: str, windows: List[WindowData], config: Config) -> R
     for w in windows:
         if not w.resolved_side:
             continue
-        act = _first_action(instance, w, config)
-        if act is None:
+        entry = _simulate_entry(instance, w, config)
+        if entry is None:
             result.per_window.append({"window_id": w.window_id, "action": None})
             continue
-        side = act["side"]
-        # Fill against the book at the poll where the strategy entered.
-        entry_snap = next((s for s in w.polls if s.poll_index == act["poll_index"]), w.polls[-1])
-        asks = entry_snap.books.get(side, {}).get("asks", [])
-        other = "Down" if side == "Up" else "Up"
-        comp_bids = entry_snap.books.get(other, {}).get("bids", []) if config.use_cross_book_fill else None
-        fill = simulate_fill(side, asks, config.stake, comp_bids,
-                             config.slippage_coeff, config.slippage_exp)
-        if fill is None:
-            result.per_window.append({"window_id": w.window_id, "action": side, "filled": False})
-            continue
+        side, fill = entry
         trade = score_trade("<replay>", w.window_id, fill, w.resolved_side)
         result.stats.record(trade)
         result.per_window.append(

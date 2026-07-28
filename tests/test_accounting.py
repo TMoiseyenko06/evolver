@@ -71,6 +71,31 @@ def test_simulate_fill_empty_book_returns_none():
     assert simulate_fill("Up", [], 10.0) is None
 
 
+def test_limit_order_does_not_pay_above_limit():
+    # Book: 5 shares @ 0.44, then deep @ 0.50. A limit of 0.46 fills only the 0.44
+    # level (never crosses to 0.50), so a partial fill at 0.44 — no slippage, price
+    # certainty, and NO cross-book correction (the cap is the protection).
+    asks = [(0.44, 5), (0.50, 100000)]
+    fill = simulate_fill("Up", asks, 10.0, complement_bids=[(0.40, 100000)], limit=0.46)
+    assert fill is not None
+    assert fill.avg_price == pytest.approx(0.44)     # capped: never paid the 0.50 level
+    assert fill.shares == pytest.approx(5.0)         # only the 5 shares offered <= limit
+    assert fill.cost == pytest.approx(5 * 0.44)      # partial fill, < full stake
+
+
+def test_limit_order_no_fill_when_ask_above_limit_returns_none():
+    # Best ask 0.50 but limit 0.46 -> nothing offered at your price -> None (the caller
+    # keeps trying later polls; a resting order waiting for its price).
+    assert simulate_fill("Up", [(0.50, 100000)], 10.0, limit=0.46) is None
+
+
+def test_limit_order_fills_at_ask_when_ask_below_limit():
+    # Ask 0.42 <= limit 0.46 -> you fill at the better price 0.42, not the limit.
+    fill = simulate_fill("Up", [(0.42, 100000)], 10.0, limit=0.46)
+    assert fill is not None
+    assert fill.avg_price == pytest.approx(0.42)
+
+
 def test_cross_book_no_arb_reconstruction():
     from evolver.engine import no_arb_floor
 

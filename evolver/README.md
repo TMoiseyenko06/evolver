@@ -299,7 +299,15 @@ the one command that touches real funds.
   comparable scale.
 - **Fee is charged on filled shares at the volume-weighted average fill price**,
   so a strategy's `ctx.breakeven` estimate matches what it actually pays.
-- **Fills are corrected for phantom liquidity at cheap "longshot" prices.** Walking
+- **Limit orders (price-certain fills).** A strategy may return
+  `{"side": "Up", "limit": 0.46}`: it fills only the book at or below the limit, at the
+  first poll the ask reaches it, and never pays more — so a limit fill has NO slippage
+  and NO cross-book correction (the cap *is* the protection); a limit that's never
+  offered simply doesn't trade that window. This is the honest fix for the fill
+  slippage a thin-edge strategy can't afford — you know exactly where you buy.
+  `decide()` re-returns its `{side, limit}` each poll until it fills (a resting order).
+  Omitting `limit` = a MARKET order, which still gets the correction below.
+- **Market fills are corrected for phantom liquidity at cheap "longshot" prices.** Walking
   the *displayed* ask book overstates fills at extreme-cheap prices, because that
   displayed liquidity is largely phantom/stale — live calibration showed a `0.06`
   displayed fill actually executing near `0.17`. Two corrections (`engine.py`):
