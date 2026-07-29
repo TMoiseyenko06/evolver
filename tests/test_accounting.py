@@ -177,3 +177,40 @@ def test_resolution_no_mismatch_when_agree():
     assert mismatch is False
     assert resolved == "Down"
     assert trades[0].won is True
+
+
+def test_price_guard_blocks_fills_far_above_best_ask():
+    from evolver.engine import price_cap
+
+    # Reproduces the live $5 finding: intended ~0.49, but the book is thin there and
+    # the walk lands at ~0.69. With a 3c guard the fill is refused (skip the window)
+    # rather than paying 20c over — a negative-EV fill even when it wins.
+    asks = [(0.49, 1), (0.69, 100000)]
+    assert price_cap(asks, 0.03) == pytest.approx(0.52)
+    assert simulate_fill("Up", asks, 5.0, max_slippage=0.03) is None   # guarded -> no fill
+    unguarded = simulate_fill("Up", asks, 5.0)                          # old behavior
+    assert unguarded is not None and unguarded.avg_price > 0.6          # ...fills way up
+
+
+def test_price_guard_allows_fills_within_tolerance():
+    # Best ask 0.49, order fills at ~0.50 average — inside the 3c guard, so it fills.
+    asks = [(0.49, 8), (0.51, 100000)]
+    fill = simulate_fill("Up", asks, 5.0, max_slippage=0.03)
+    assert fill is not None
+    assert fill.avg_price <= 0.52
+
+
+def test_price_guard_disabled_by_default():
+    # max_slippage=None (default) preserves the previous unguarded behavior.
+    asks = [(0.49, 1), (0.69, 100000)]
+    assert simulate_fill("Up", asks, 5.0) is not None
+
+
+def test_executor_price_cap_from_best_ask():
+    from evolver.execution import SynthesisExecutor
+
+    ex = SynthesisExecutor(client=None, slippage_cap=0.98, max_slippage=0.03)
+    assert ex.price_cap([(0.49, 10), (0.69, 100)]) == pytest.approx(0.52)
+    assert ex.price_cap([]) == 0.98                     # no book -> fallback cap
+    assert SynthesisExecutor(client=None, slippage_cap=0.98,
+                             max_slippage=None).price_cap([(0.49, 10)]) == 0.98

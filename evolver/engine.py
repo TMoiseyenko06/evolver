@@ -96,6 +96,20 @@ def executable_price(
     return apply_slippage(avg_price, slippage_coeff, slippage_exp)
 
 
+def price_cap(asks: List[Level], max_slippage: Optional[float]) -> Optional[float]:
+    """The highest price we'd accept: ``best_ask + max_slippage`` (None = no cap).
+
+    Mirrors the guard the real executor sends with its order, so paper doesn't
+    assume fills the venue would refuse.
+    """
+    if max_slippage is None or not asks:
+        return None
+    prices = [p for p, _ in asks if p > 0]
+    if not prices:
+        return None
+    return min(min(prices) + max_slippage, 0.999)
+
+
 def simulate_fill(
     side: str,
     asks: List[Level],
@@ -103,6 +117,7 @@ def simulate_fill(
     complement_bids: Optional[List[Level]] = None,
     slippage_coeff: float = 0.0,
     slippage_exp: float = 2.0,
+    max_slippage: Optional[float] = None,
 ) -> Optional[Fill]:
     """Simulate buying ``stake`` dollars of ``side`` by walking its ask book.
 
@@ -125,6 +140,9 @@ def simulate_fill(
     if eff_price > avg_price:
         shares = cost / eff_price  # same dollars, worse price => fewer shares
         avg_price = eff_price
+    cap = price_cap(asks, max_slippage)
+    if cap is not None and avg_price > cap:
+        return None  # the real order's price guard would reject this fill
     fee = fees.fee(shares, avg_price)
     return Fill(side=side, shares=shares, cost=cost, avg_price=avg_price, fee=fee)
 

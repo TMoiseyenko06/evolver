@@ -35,26 +35,44 @@ class PaperExecutor:
     use_cross_book: bool = True
     slippage_coeff: float = 0.0
     slippage_exp: float = 2.0
+    max_slippage: Optional[float] = None   # mirror the real order's price guard
 
     def fill(self, side: str, token_id: str, asks: List[Level], usd: float,
              complement_bids: Optional[List[Level]] = None) -> Optional[Fill]:
         comp = complement_bids if self.use_cross_book else None
-        return simulate_fill(side, asks, usd, comp, self.slippage_coeff, self.slippage_exp)
+        return simulate_fill(side, asks, usd, comp, self.slippage_coeff, self.slippage_exp,
+                             max_slippage=self.max_slippage)
 
 
 @dataclass
 class SynthesisExecutor:
-    """Places a real MARKET order via Synthesis and returns the actual fill."""
+    """Places a real MARKET order via Synthesis and returns the actual fill.
+
+    The order carries a PRICE GUARD of ``best_ask + max_slippage`` (a marketable
+    limit): if the book has moved or is too thin to fill near the price the strategy
+    decided on, the order simply doesn't fill and we skip the window — instead of
+    filling far above fair value, which is a negative-EV trade even when it wins.
+    """
 
     client: SynthesisClient
-    slippage_cap: Optional[float] = 0.98
+    slippage_cap: Optional[float] = 0.98     # fallback when max_slippage is None
+    max_slippage: Optional[float] = 0.03     # cents above best ask we'll tolerate
     last_order: Optional[OrderResult] = None
+
+    def price_cap(self, asks: List[Level]) -> Optional[float]:
+        """The max price to send with the order: best_ask + max_slippage."""
+        if self.max_slippage is None or not asks:
+            return self.slippage_cap
+        best_ask = min(p for p, _ in asks if p > 0) if any(p > 0 for p, _ in asks) else None
+        if best_ask is None:
+            return self.slippage_cap
+        return min(round(best_ask + self.max_slippage, 4), 0.999)
 
     def fill(self, side: str, token_id: str, asks: List[Level], usd: float,
              complement_bids: Optional[List[Level]] = None) -> Optional[Fill]:
         # complement_bids is unused for a real order (the venue fills it), but kept to
         # match the Executor protocol so paper and real are drop-in interchangeable.
-        order = self.client.place_market_order(token_id, "BUY", usd, self.slippage_cap)
+        order = self.client.place_market_order(token_id, "BUY", usd, self.price_cap(asks))
         self.last_order = order
         if order.shares <= 0:
             return None
@@ -69,4 +87,5 @@ def build_synthesis_executor(config: Config) -> SynthesisExecutor:
         wallet_id=config.synthesis_wallet_id,
         base_url=config.synthesis_base_url,
     )
-    return SynthesisExecutor(client=client, slippage_cap=config.order_slippage_cap)
+    return SynthesisExecutor(client=client, slippage_cap=config.order_slippage_cap,
+                             max_slippage=config.max_slippage)

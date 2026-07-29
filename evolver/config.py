@@ -128,7 +128,14 @@ class Config:
     live_stake: float = 1.0        # real USDC per calibration order
     max_live_stake: float = 5.0    # hard safety cap; refuse to place above this
     calibration_trades: int = 12   # default number of real trades to collect
-    order_slippage_cap: float = 0.98  # max price to pay on a MARKET buy (0<p<=1)
+    # Absolute price cap on a MARKET buy: the order is sent with a guard of
+    # `best_ask + max_slippage`, so a thin/moved book can't fill us far above the
+    # price the strategy decided on. Live calibration at $5 showed an order intended
+    # at 0.490 filling at 0.689 (~20c) under the old blanket 0.98 cap — a badly
+    # negative-EV fill. With this set, that order simply doesn't fill and we skip the
+    # window. Set to None to disable the dynamic cap and use `order_slippage_cap`.
+    max_slippage: Optional[float] = 0.03
+    order_slippage_cap: float = 0.98  # fallback max price on a MARKET buy (0<p<=1)
 
     # --- paths ---
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("EVOLVER_DATA_DIR", ".")))

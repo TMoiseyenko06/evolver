@@ -73,7 +73,8 @@ def run_calibration(
 ) -> List[dict]:
     """Collect ``n_trades`` paired paper/real trades and persist each comparison."""
     paper = PaperExecutor(use_cross_book=config.use_cross_book_fill,
-                          slippage_coeff=config.slippage_coeff, slippage_exp=config.slippage_exp)
+                          slippage_coeff=config.slippage_coeff, slippage_exp=config.slippage_exp,
+                          max_slippage=config.max_slippage)
     records: List[dict] = []
     seq = 0
     consecutive_failures = 0
@@ -96,7 +97,14 @@ def run_calibration(
 
             paper_fill = paper.fill(side, token_id, asks, config.live_stake, comp_bids)
             if paper_fill is None:
-                log.info("%s: driver entered %s but book empty; no real order placed", handle.window_id, side)
+                best = min((p for p, _ in asks if p > 0), default=None)
+                if best is not None and config.max_slippage is not None:
+                    log.info("%s: %s fill would exceed price guard (best ask %.3f + %.3f); "
+                             "skipping — no real order placed",
+                             handle.window_id, side, best, config.max_slippage)
+                else:
+                    log.info("%s: driver entered %s but book empty; no real order placed",
+                             handle.window_id, side)
                 break
             try:
                 real_fill = real_executor.fill(side, token_id, asks, config.live_stake)
