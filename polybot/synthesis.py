@@ -67,21 +67,6 @@ class SynthesisClient:
     def _wallet_path(self, suffix: str = "") -> str:
         return f"{self.base_url}/api/v1/wallet/pol/{self.wallet_id}{suffix}"
 
-    def place_limit_order(
-        self,
-        token_id: str,
-        side: str,
-        usdc_amount: float,
-        limit_price: float,
-    ) -> OrderResult:
-        """Place a LIMIT buy/sell of ``usdc_amount`` USDC of ``token_id`` at
-        ``limit_price``.
-
-        The venue will not fill above ``limit_price`` (for a BUY), so the fill price
-        is known in advance — no slippage. May fill partially or not at all.
-        """
-        return self._place(token_id, side, usdc_amount, "LIMIT", limit_price)
-
     def place_market_order(
         self,
         token_id: str,
@@ -94,27 +79,17 @@ class SynthesisClient:
         ``slippage_cap`` (0<p<=1) is passed as the MARKET ``price`` guard so we
         never pay above it. Raises :class:`SynthesisError` on any non-2xx.
         """
-        return self._place(token_id, side, usdc_amount, "MARKET", slippage_cap)
-
-    def _place(
-        self,
-        token_id: str,
-        side: str,
-        usdc_amount: float,
-        order_type: str,
-        price: Optional[float] = None,
-    ) -> OrderResult:
         if not self.api_key or not self.wallet_id:
             raise SynthesisError("Synthesis api_key/wallet_id not configured")
         body: Dict[str, Any] = {
             "token_id": str(token_id),
             "side": side.upper(),
-            "type": order_type,
+            "type": "MARKET",
             "amount": str(usdc_amount),
             "units": "USDC",
         }
-        if price is not None:
-            body["price"] = str(price)
+        if slippage_cap is not None:
+            body["price"] = str(slippage_cap)
         try:
             resp = requests.post(
                 self._wallet_path("/order"), json=body, headers=self._headers(), timeout=self.timeout

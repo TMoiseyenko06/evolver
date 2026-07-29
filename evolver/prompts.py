@@ -92,20 +92,10 @@ THE STRATEGY CONTRACT (exact)
 - Class attributes: NAME (short unique snake_case string) and DESCRIPTION \
 (one paragraph: the hypothesis and when it trades).
 - Method: def decide(self, ctx) -> dict | None. Return None to pass, or \
-{{"side": "Up"}} / {{"side": "Down"}} to buy $10.
-- ORDER TYPE — prefer LIMIT orders. Add a "limit" price: \
-{{"side": "Up", "limit": 0.46}} means buy Up ONLY at or below 0.46. You then know \
-exactly the most you pay (no slippage), you fill at the first poll the ask reaches \
-your limit, and if it never does you simply don't trade that window. WITHOUT a \
-limit you buy at MARKET and pay the real ask, which on thin/cheap books fills \
-WORSE than displayed — so a market fill quietly erodes a thin edge. Set your limit \
-at the highest price where the trade is still +EV (i.e. limit + fee_per_share(limit) \
-< your estimated win probability, with margin). A too-low limit never fills; a \
-too-high limit overpays — tune it to your edge.
-- decide() is called once at window open and once per 10-second poll, and you must \
-RE-RETURN your {{"side"..., "limit"...}} each poll until it fills (a resting order \
-you keep alive). You enter at most once per window; positions are held to \
-resolution (no exits). Use ctx.seconds_remaining to time/abandon your entry.
+{{"side": "Up"}} / {{"side": "Down"}} to buy $10 at the ask.
+- decide() is called once at window open and once per 10-second poll. You may \
+enter at most once per window; positions are held to resolution (no exits). Use \
+ctx.seconds_remaining to time your entry.
 
 HARD SANDBOX RULES (violating these gets your strategy rejected)
 - The ONLY imports allowed are `math` and `statistics`. No other imports.

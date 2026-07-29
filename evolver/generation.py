@@ -82,7 +82,6 @@ def run_window(
             if action is None:
                 continue
             side = action["side"]
-            limit = action.get("limit")
             with _stats_lock:  # consistent read vs. the background resolver's writes
                 affordable = strat.bankroll >= config.stake
             if not affordable:
@@ -93,12 +92,9 @@ def run_window(
             other = "Down" if side == "Up" else "Up"
             comp_bids = snap.books.get(other, {}).get("bids", []) if config.use_cross_book_fill else None
             fill = simulate_fill(side, asks, config.stake, comp_bids,
-                                 config.slippage_coeff, config.slippage_exp, limit=limit)
+                                 config.slippage_coeff, config.slippage_exp)
             if fill is None:
-                # A limit that isn't offered yet isn't a rejection — the order rests and
-                # the strategy keeps trying later polls until it fills or the window ends.
-                msg = "limit not met (resting)" if limit is not None else "empty book / no fill"
-                decisions[-1] = Decision(strat.name, snap.poll_index, action, msg)
+                decisions[-1] = Decision(strat.name, snap.poll_index, action, "empty book / no fill")
                 continue
             fills[strat.name] = fill
             strat.entered_this_window = True

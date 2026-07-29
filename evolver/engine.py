@@ -14,16 +14,12 @@ from polybot import fees
 from .models import Book, Fill, Level, TradeResult
 
 
-def walk_ask_book(asks: List[Level], stake: float, limit: Optional[float] = None) -> tuple:
+def walk_ask_book(asks: List[Level], stake: float) -> tuple:
     """Walk the ascending ask book spending up to ``stake`` dollars on shares.
 
     Returns ``(shares, cost, avg_price)``. Levels are consumed best (lowest) price
     first; the last level may be partially filled. If the book cannot absorb the
     full stake, ``cost`` will be less than ``stake`` (thin book).
-
-    ``limit`` (a LIMIT-order price cap): levels priced above ``limit`` are never
-    consumed — you pay only what the book offers at or below your limit, so you may
-    fill partially or not at all, but you never pay more than ``limit``.
     """
     remaining = stake
     shares = 0.0
@@ -31,8 +27,6 @@ def walk_ask_book(asks: List[Level], stake: float, limit: Optional[float] = None
     for price, size in sorted(asks, key=lambda x: x[0]):
         if remaining <= 1e-12 or price <= 0:
             break
-        if limit is not None and price > limit + 1e-12:
-            break  # limit order: don't cross above the cap
         level_notional = price * size
         if level_notional <= remaining:
             shares += size
@@ -109,7 +103,6 @@ def simulate_fill(
     complement_bids: Optional[List[Level]] = None,
     slippage_coeff: float = 0.0,
     slippage_exp: float = 2.0,
-    limit: Optional[float] = None,
 ) -> Optional[Fill]:
     """Simulate buying ``stake`` dollars of ``side`` by walking its ask book.
 
@@ -117,24 +110,21 @@ def simulate_fill(
     fill price, matching ``ctx.fee`` so a strategy's breakeven estimate lines up
     with what it actually pays. Returns None if nothing could be filled.
 
-    Two order types:
-
-    - **Limit** (``limit`` set): fill only the book at or below ``limit`` — you know
-      exactly the most you'll pay, so there is NO slippage correction (the cap is the
-      protection). If nothing is offered ≤ ``limit`` you get None: no fill, and the
-      caller keeps trying later polls (a resting order waiting for its price).
-    - **Market** (``limit`` None): walk the whole book, then correct the price via
-      :func:`executable_price` (cross-book no-arb floor from ``complement_bids``, else
-      the slippage curve), since displayed cheap liquidity is largely non-executable.
+    Displayed liquidity at cheap "longshot" prices is largely non-executable, so the
+    walked price is corrected via :func:`executable_price` — the per-window no-arb
+    floor from ``complement_bids`` (the OTHER side's bid book) when available, else
+    the parametric slippage curve. The same dollars then fill at the worse price, so
+    you get fewer shares — which stops the sim from paying longshot strategies for
+    fills the market never gives. Pass no ``complement_bids`` and ``slippage_coeff=0``
+    for the raw (idealised) walk.
     """
-    shares, cost, avg_price = walk_ask_book(asks, stake, limit=limit)
+    shares, cost, avg_price = walk_ask_book(asks, stake)
     if shares <= 0:
         return None
-    if limit is None:
-        eff_price = executable_price(avg_price, complement_bids, slippage_coeff, slippage_exp)
-        if eff_price > avg_price:
-            shares = cost / eff_price  # same dollars, worse price => fewer shares
-            avg_price = eff_price
+    eff_price = executable_price(avg_price, complement_bids, slippage_coeff, slippage_exp)
+    if eff_price > avg_price:
+        shares = cost / eff_price  # same dollars, worse price => fewer shares
+        avg_price = eff_price
     fee = fees.fee(shares, avg_price)
     return Fill(side=side, shares=shares, cost=cost, avg_price=avg_price, fee=fee)
 
