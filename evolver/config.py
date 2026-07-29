@@ -134,7 +134,7 @@ class Config:
     # at 0.490 filling at 0.689 (~20c) under the old blanket 0.98 cap — a badly
     # negative-EV fill. With this set, that order simply doesn't fill and we skip the
     # window. Set to None to disable the dynamic cap and use `order_slippage_cap`.
-    max_slippage: Optional[float] = 0.06
+    max_slippage: Optional[float] = 0.10
     order_slippage_cap: float = 0.98  # fallback max price on a MARKET buy (0<p<=1)
 
     # --- paths ---
