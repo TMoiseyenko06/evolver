@@ -18,7 +18,7 @@ import statistics
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from polybot.synthesis import OrderNotFillable, SynthesisError
+from polybot.synthesis import SynthesisError
 
 from . import colors as c
 from .config import Config
@@ -79,7 +79,6 @@ def run_calibration(
     records: List[dict] = []
     seq = 0
     consecutive_failures = 0
-    skipped_by_guard = 0
 
     while len(records) < n_trades:
         handle = market.next_window()
@@ -110,15 +109,6 @@ def run_calibration(
                 break
             try:
                 real_fill = real_executor.fill(side, token_id, asks, config.live_stake)
-            except OrderNotFillable as exc:
-                # The price guard refused a bad fill — a normal skip, NOT a failure.
-                # It must not count toward the consecutive-failure abort, or a choppy
-                # stretch would kill the whole run.
-                skipped_by_guard += 1
-                consecutive_failures = 0
-                log.info("%s: price guard rejected the order (%s); skipping window "
-                         "[%d skipped so far]", handle.window_id, exc, skipped_by_guard)
-                break
             except SynthesisError as exc:
                 consecutive_failures += 1
                 log.error("real order failed (%d in a row): %s", consecutive_failures, exc)
