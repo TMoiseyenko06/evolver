@@ -331,3 +331,38 @@ def test_calibration_aborts_after_repeated_real_failures(tmp_path):
     with pytest.raises(SynthesisError):
         run_calibration(market, real, driver, store, cfg, n_trades=5, max_consecutive_failures=3)
     assert len(store.calibration_rows()) == 0
+
+
+def test_not_fillable_is_classified_separately():
+    """A price-guard rejection must raise OrderNotFillable, not a generic error.
+
+    Otherwise calibrate counts it toward the consecutive-failure abort and a choppy
+    stretch (3 guard rejections in a row) would kill an entire run.
+    """
+    import pytest
+    from polybot.synthesis import OrderNotFillable, SynthesisClient, SynthesisError, _is_not_fillable
+
+    assert _is_not_fillable('{"success":false,"response":"Order could not be fully filled"}')
+    assert _is_not_fillable("insufficient liquidity for this order")
+    assert not _is_not_fillable('{"error":"invalid api key"}')
+
+    class _Resp:
+        def __init__(self, code, text):
+            self.status_code, self.text = code, text
+
+    import polybot.synthesis as syn
+    client = SynthesisClient(api_key="k", wallet_id="w")
+
+    # 400 "could not be fully filled" -> OrderNotFillable (a normal skip)
+    syn.requests = type("R", (), {"post": staticmethod(
+        lambda *a, **k: _Resp(400, '{"success":false,"response":"Order could not be fully filled"}')),
+        "RequestException": Exception})
+    with pytest.raises(OrderNotFillable):
+        client.place_market_order("t", "BUY", 5.0, 0.59)
+
+    # any other 400 -> plain SynthesisError (a real failure worth aborting on)
+    syn.requests = type("R", (), {"post": staticmethod(
+        lambda *a, **k: _Resp(400, '{"error":"invalid api key"}')), "RequestException": Exception})
+    with pytest.raises(SynthesisError) as ei:
+        client.place_market_order("t", "BUY", 5.0, 0.59)
+    assert not isinstance(ei.value, OrderNotFillable)

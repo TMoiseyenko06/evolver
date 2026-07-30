@@ -32,6 +32,16 @@ class SynthesisError(RuntimeError):
     pass
 
 
+class OrderNotFillable(SynthesisError):
+    """The order could not be filled within its price cap.
+
+    This is the price guard doing its job — the book couldn't satisfy the order at or
+    below ``best_ask + max_slippage``, so the venue rejected it instead of filling us
+    far above the intended price. It is a NORMAL skip (try the next window), not an
+    execution failure, and must not count toward any consecutive-failure abort.
+    """
+
+
 @dataclass
 class OrderResult:
     order_id: str
@@ -102,7 +112,12 @@ class SynthesisClient:
                 f"SYNTHESIS_BASE_URL (should be https://synthesis.trade): {resp.text[:200]}"
             )
         if resp.status_code >= 400:
-            raise SynthesisError(f"order rejected {resp.status_code}: {resp.text[:400]}")
+            body = resp.text[:400]
+            if _is_not_fillable(body):
+                raise OrderNotFillable(
+                    f"not fillable within price cap {slippage_cap}: {body}"
+                )
+            raise SynthesisError(f"order rejected {resp.status_code}: {body}")
         return parse_order(resp.json())
 
     def get_order(self, order_id: str) -> Dict[str, Any]:
@@ -150,6 +165,21 @@ class SynthesisClient:
         if resp.status_code >= 400:
             return False, f"{resp.status_code} from {url}: {resp.text[:200]}"
         return True, "ok"
+
+
+_NOT_FILLABLE_MARKERS = (
+    "could not be fully filled",
+    "not be filled",
+    "insufficient liquidity",
+    "not fillable",
+    "no liquidity",
+)
+
+
+def _is_not_fillable(body: str) -> bool:
+    """True when a 4xx body says the book couldn't satisfy the order at our price."""
+    low = (body or "").lower()
+    return any(m in low for m in _NOT_FILLABLE_MARKERS)
 
 
 def _unwrap(data: Any) -> Any:
