@@ -76,6 +76,15 @@ class Config:
     use_cross_book_fill: bool = True
     slippage_coeff: float = 0.55
     slippage_exp: float = 2.0
+    # Fraction of each book level's DISPLAYED size we assume is actually executable.
+    # Displayed size isn't all real or all ours (stale quotes, spoofing, competing
+    # takers), so sweeping 100% of a level is optimistic. This only bites on THIN
+    # books — a $10 order against 100 displayed shares at 0.10 gets a partial fill
+    # instead of the whole level, which stops the sim paying huge phantom longshot
+    # wins — while deep books are unaffected (25% of thousands of shares still covers
+    # $10), preserving the fill accuracy calibration measured at 0.40-0.60. Raise
+    # toward 1.0 to assume you get everything displayed.
+    book_participation: float = 0.25
 
     # --- selection / culling ---
     # Survival is ranked by a RISK-ADJUSTED (Sharpe-style) score on LIFETIME stats:

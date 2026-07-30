@@ -14,22 +14,35 @@ from polybot import fees
 from .models import Book, Fill, Level, TradeResult
 
 
-def walk_ask_book(asks: List[Level], stake: float) -> tuple:
+def walk_ask_book(asks: List[Level], stake: float, participation: float = 1.0) -> tuple:
     """Walk the ascending ask book spending up to ``stake`` dollars on shares.
 
     Returns ``(shares, cost, avg_price)``. Levels are consumed best (lowest) price
     first; the last level may be partially filled. If the book cannot absorb the
     full stake, ``cost`` will be less than ``stake`` (thin book).
+
+    ``participation`` (0-1) is the fraction of each level's DISPLAYED size we assume
+    is actually executable for us. Displayed size is not all real or all ours — some
+    is stale, some is spoofed, and other takers compete for it — so assuming we sweep
+    100% of a level is optimistic. This bites exactly where it should: on thin books
+    (a $10 order against 100 displayed shares at 0.10 gets a partial fill instead of
+    the whole level) while leaving deep books unchanged (25% of thousands of shares
+    still covers a $10 order), which preserves the fill accuracy calibration measured
+    at normal 0.40-0.60 prices.
     """
+    part = 1.0 if participation is None else max(0.0, min(1.0, participation))
     remaining = stake
     shares = 0.0
     cost = 0.0
     for price, size in sorted(asks, key=lambda x: x[0]):
         if remaining <= 1e-12 or price <= 0:
             break
-        level_notional = price * size
+        avail = size * part
+        if avail <= 0:
+            continue
+        level_notional = price * avail
         if level_notional <= remaining:
-            shares += size
+            shares += avail
             cost += level_notional
             remaining -= level_notional
         else:
@@ -118,6 +131,7 @@ def simulate_fill(
     slippage_coeff: float = 0.0,
     slippage_exp: float = 2.0,
     max_slippage: Optional[float] = None,
+    participation: float = 1.0,
 ) -> Optional[Fill]:
     """Simulate buying ``stake`` dollars of ``side`` by walking its ask book.
 
@@ -133,7 +147,7 @@ def simulate_fill(
     fills the market never gives. Pass no ``complement_bids`` and ``slippage_coeff=0``
     for the raw (idealised) walk.
     """
-    shares, cost, avg_price = walk_ask_book(asks, stake)
+    shares, cost, avg_price = walk_ask_book(asks, stake, participation)
     if shares <= 0:
         return None
     eff_price = executable_price(avg_price, complement_bids, slippage_coeff, slippage_exp)

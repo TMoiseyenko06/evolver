@@ -299,6 +299,17 @@ the one command that touches real funds.
   comparable scale.
 - **Fee is charged on filled shares at the volume-weighted average fill price**,
   so a strategy's `ctx.breakeven` estimate matches what it actually pays.
+- **Book participation cap (`book_participation`, default 0.25).** We assume only a
+  fraction of each level's *displayed* size is actually executable for us — displayed
+  size isn't all real or all ours (stale quotes, spoofing, competing takers), so
+  sweeping 100% of a level is optimistic. This bites only on **thin** books: a $10
+  order against 100 displayed shares at `0.10` now gets a **partial fill** (25 shares,
+  ~$22 win) instead of the whole level (~$90 phantom win), while deep books are
+  untouched (25% of thousands of shares still covers $10) — preserving the fill
+  accuracy live calibration measured at normal 0.40–0.60 prices. The cross-book floor
+  and the price guard do **not** cover this case: when large size is displayed *at the
+  touch* the walk never rises above the best ask and the book can be perfectly
+  price-consistent, yet the depth may not really be there.
 - **Fills are corrected for phantom liquidity at cheap "longshot" prices.** Walking
   the *displayed* ask book overstates fills at extreme-cheap prices, because that
   displayed liquidity is largely phantom/stale — live calibration showed a `0.06`

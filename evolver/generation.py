@@ -93,7 +93,8 @@ def run_window(
             comp_bids = snap.books.get(other, {}).get("bids", []) if config.use_cross_book_fill else None
             fill = simulate_fill(side, asks, config.stake, comp_bids,
                                  config.slippage_coeff, config.slippage_exp,
-                                 max_slippage=config.max_slippage)
+                                 max_slippage=config.max_slippage,
+                                 participation=config.book_participation)
             if fill is None:
                 # Either an empty book, or the order would walk further above the best
                 # ask than the live executor's price guard allows — in which case the

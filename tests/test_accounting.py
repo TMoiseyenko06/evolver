@@ -214,3 +214,37 @@ def test_executor_price_cap_from_best_ask():
     assert ex.price_cap([]) == 0.98                     # no book -> fallback cap
     assert SynthesisExecutor(client=None, slippage_cap=0.98,
                              max_slippage=None).price_cap([(0.49, 10)]) == 0.98
+
+
+def test_participation_caps_thin_longshot_fill():
+    # The board case: a $10 order against 100 displayed shares at 0.10. Assuming we
+    # sweep the whole level books a ~$87 phantom win; at 25% participation we get 25
+    # shares (a partial fill), so the win scales down to something believable.
+    asks = [(0.10, 100)]
+    full = simulate_fill("Down", asks, 10.0)                      # participation=1.0
+    capped = simulate_fill("Down", asks, 10.0, participation=0.25)
+    assert full.shares == pytest.approx(100.0)
+    assert capped.shares == pytest.approx(25.0)
+    assert capped.cost == pytest.approx(2.50)                     # partial fill
+    # Payout if it wins: 100 vs 25 shares -> the phantom jackpot shrinks 4x.
+    assert score_trade("s", "w", full, "Down").net_pnl > 85
+    assert score_trade("s", "w", capped, "Down").net_pnl < 25
+
+
+def test_participation_does_not_change_deep_book_fills():
+    # A deep book at a normal price: 25% of 10000 shares still covers a $10 order, so
+    # the fill is identical — preserving the accuracy calibration measured at 0.40-0.60.
+    asks = [(0.50, 10000)]
+    full = simulate_fill("Up", asks, 10.0)
+    capped = simulate_fill("Up", asks, 10.0, participation=0.25)
+    assert capped.shares == pytest.approx(full.shares)
+    assert capped.avg_price == pytest.approx(full.avg_price)
+
+
+def test_participation_walks_to_next_level_when_capped():
+    # With only 25% of each level available, the order walks deeper — a realistic
+    # consequence of not being able to take the whole touch.
+    asks = [(0.40, 10), (0.50, 10000)]
+    shares, cost, avg = walk_ask_book(asks, 10.0, participation=0.25)
+    assert cost == pytest.approx(10.0)          # still fills (deep second level)
+    assert avg > 0.40                            # but at a worse average price

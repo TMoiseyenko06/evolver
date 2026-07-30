@@ -36,12 +36,13 @@ class PaperExecutor:
     slippage_coeff: float = 0.0
     slippage_exp: float = 2.0
     max_slippage: Optional[float] = None   # mirror the real order's price guard
+    participation: float = 1.0             # fraction of displayed size assumed executable
 
     def fill(self, side: str, token_id: str, asks: List[Level], usd: float,
              complement_bids: Optional[List[Level]] = None) -> Optional[Fill]:
         comp = complement_bids if self.use_cross_book else None
         return simulate_fill(side, asks, usd, comp, self.slippage_coeff, self.slippage_exp,
-                             max_slippage=self.max_slippage)
+                             max_slippage=self.max_slippage, participation=self.participation)
 
 
 @dataclass

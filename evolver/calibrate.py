@@ -74,7 +74,8 @@ def run_calibration(
     """Collect ``n_trades`` paired paper/real trades and persist each comparison."""
     paper = PaperExecutor(use_cross_book=config.use_cross_book_fill,
                           slippage_coeff=config.slippage_coeff, slippage_exp=config.slippage_exp,
-                          max_slippage=config.max_slippage)
+                          max_slippage=config.max_slippage,
+                          participation=config.book_participation)
     records: List[dict] = []
     seq = 0
     consecutive_failures = 0
