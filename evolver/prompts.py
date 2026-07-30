@@ -156,12 +156,26 @@ def _stat_line(s: LoadedStrategy) -> str:
     )
 
 
+# With a large population, embedding every strategy's source would blow up the
+# prompt (50 strategies ≈ tens of thousands of tokens per generation) and dilute the
+# signal. Include full CODE only for the best/worst few — the ones actually worth
+# mutating or learning failure from — and stats-only lines for the rest.
+MAX_SOURCE_SURVIVORS = 10
+MAX_SOURCE_RETIREES = 8
+
+
 def evolution_prompt(
     survivors: List[LoadedStrategy],
     retirees: List[LoadedStrategy],
     n_needed: int,
+    max_source_survivors: int = MAX_SOURCE_SURVIVORS,
+    max_source_retirees: int = MAX_SOURCE_RETIREES,
 ) -> str:
-    """User prompt for later generations: mutate winners + invent novel ideas."""
+    """User prompt for later generations: mutate winners + invent novel ideas.
+
+    Only the first ``max_source_*`` survivors/retirees contribute full source; the
+    remainder appear as stat lines so the prompt stays a sane size on big populations.
+    """
     parts: List[str] = []
     parts.append(
         f"This is an evolutionary run. Below are the SURVIVORS (top performers to "
@@ -169,14 +183,19 @@ def evolution_prompt(
         f"exactly {n_needed} NEW strategies as {n_needed} ```python code blocks."
     )
     parts.append("\n=== SURVIVORS (code + lifetime stats) ===")
-    for s in survivors:
+    for i, s in enumerate(survivors):
         parts.append(_stat_line(s))
-        parts.append(f"```python\n{s.source.strip()}\n```")
+        if i < max_source_survivors:
+            parts.append(f"```python\n{s.source.strip()}\n```")
+    if len(survivors) > max_source_survivors:
+        parts.append(f"(code shown for the top {max_source_survivors} survivors; "
+                     f"{len(survivors) - max_source_survivors} more listed by stats only)")
     parts.append("\n=== RETIREES (code + stats + why they failed) ===")
-    for s in retirees:
+    for i, s in enumerate(retirees):
         parts.append(_stat_line(s))
         parts.append(f"failure_analysis: {failure_analysis(s)}")
-        parts.append(f"```python\n{s.source.strip()}\n```")
+        if i < max_source_retirees:
+            parts.append(f"```python\n{s.source.strip()}\n```")
     parts.append("\n" + _diversity_directive(survivors))
     parts.append(
         f"\nProduce a MIX: some mutations/combinations of the survivors (set "

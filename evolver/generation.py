@@ -484,13 +484,30 @@ def _request_replacement(
 
 
 def seed_population(client, store: Store, config: Config) -> List[LoadedStrategy]:
-    """Generation 1: create ``population_size`` strategies from scratch."""
+    """Generation 1: create ``population_size`` strategies from scratch.
+
+    One reply rarely contains a large batch in full (blocks that fail the sandbox or
+    duplicate each other), so we keep asking for the remaining shortfall — same
+    approach as :func:`evolve` — until the population is seeded or we run out of
+    attempts.
+    """
     taken = set(store.all_strategy_sources().keys())
-    strategies = generate_batch(
-        client, store, config, generation=1, n_needed=config.population_size,
-        system=SYSTEM_PROMPT, user=seed_prompt(config.population_size),
-        kind="seed", existing=[], taken_names=taken,
-    )
+    strategies: List[LoadedStrategy] = []
+    for attempt in range(max(1, config.max_breed_attempts)):
+        n_needed = config.population_size - len(strategies)
+        if n_needed <= 0:
+            break
+        batch = generate_batch(
+            client, store, config, generation=1, n_needed=n_needed,
+            system=SYSTEM_PROMPT, user=seed_prompt(n_needed),
+            kind="seed", existing=strategies, taken_names=taken,
+        )
+        strategies.extend(batch)
+        if not batch:
+            log.warning("seed attempt %d/%d produced 0 strategies",
+                        attempt + 1, config.max_breed_attempts)
+    if len(strategies) < config.population_size:
+        log.warning("seeded %d/%d strategies", len(strategies), config.population_size)
     for s in strategies:
         store.save_state(s, alive=True, generation=1)
     return strategies

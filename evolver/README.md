@@ -347,7 +347,11 @@ the one command that touches real funds.
   retries up to `max_breed_attempts` (default 3), asking only for the shortfall each
   round, so the population never silently shrinks. **Note:** if `survivors ==
   population_size` nothing is culled and nothing new is bred — keep `survivors <
-  population_size` (default 10 vs 20) for fresh strategies every generation.
+  population_size` (default 25 vs 50) for fresh strategies every generation. On a
+  large population the evolution prompt shows **full source only for the top
+  `MAX_SOURCE_SURVIVORS`/`MAX_SOURCE_RETIREES`** (10/8) and stat lines for the rest,
+  so the prompt stays a sane size; seeding retries the shortfall too, since one reply
+  rarely returns 50 valid blocks.
 - **Resume**: `run` reloads the alive population from SQLite and continues at the
   next unfinished generation; an interrupted run loses nothing already persisted.
   If the alive count is below `population_size` (e.g. you raised the target), the

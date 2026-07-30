@@ -378,8 +378,10 @@ def test_system_prompt_emphasizes_volume():
     assert "volume" in seed_prompt(20).lower()
 
 
-def test_default_population_is_20_keep_10():
+def test_default_population_is_50_keep_25():
     from evolver.config import Config
 
     c = Config()
-    assert c.population_size == 20 and c.survivors == 10
+    assert c.population_size == 50 and c.survivors == 25
+    # survivors < population_size, else nothing is culled and nothing new is bred.
+    assert c.survivors < c.population_size

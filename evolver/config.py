@@ -23,8 +23,8 @@ class Config:
     model: str = field(default_factory=lambda: os.environ.get("EVOLVER_MODEL", "anthropic/claude-opus-4.8"))
 
     # --- evolution parameters ---
-    population_size: int = 20
-    survivors: int = 10
+    population_size: int = 50
+    survivors: int = 25
     windows_per_generation: int = 50
     starting_bankroll: float = 500.0
     stake: float = 10.0
