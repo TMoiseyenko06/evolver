@@ -333,37 +333,28 @@ def test_calibration_aborts_after_repeated_real_failures(tmp_path):
     assert len(store.calibration_rows()) == 0
 
 
-def test_not_fillable_is_classified_separately():
-    """A price-guard rejection must raise OrderNotFillable, not a generic error.
-
-    Otherwise calibrate counts it toward the consecutive-failure abort and a choppy
-    stretch (3 guard rejections in a row) would kill an entire run.
+def test_failed_order_message_includes_request_and_trace_headers():
+    """A rejected order's SynthesisError message must include the outgoing request
+    body and any request-id/trace-id style response headers, so a generic body like
+    "Failed to create order" is still diagnosable after the fact.
     """
     import pytest
-    from polybot.synthesis import OrderNotFillable, SynthesisClient, SynthesisError, _is_not_fillable
-
-    assert _is_not_fillable('{"success":false,"response":"Order could not be fully filled"}')
-    assert _is_not_fillable("insufficient liquidity for this order")
-    assert not _is_not_fillable('{"error":"invalid api key"}')
+    from polybot.synthesis import SynthesisClient, SynthesisError
 
     class _Resp:
-        def __init__(self, code, text):
+        def __init__(self, code, text, headers=None):
             self.status_code, self.text = code, text
-            self.headers = {}
+            self.headers = headers or {}
 
     import polybot.synthesis as syn
     client = SynthesisClient(api_key="k", wallet_id="w")
 
-    # 400 "could not be fully filled" -> OrderNotFillable (a normal skip)
     syn.requests = type("R", (), {"post": staticmethod(
-        lambda *a, **k: _Resp(400, '{"success":false,"response":"Order could not be fully filled"}')),
+        lambda *a, **k: _Resp(500, '{"success":false,"response":"Failed to create order"}',
+                              headers={"CF-RAY": "abc123"})),
         "RequestException": Exception})
-    with pytest.raises(OrderNotFillable):
-        client.place_market_order("t", "BUY", 5.0, 0.59)
-
-    # any other 400 -> plain SynthesisError (a real failure worth aborting on)
-    syn.requests = type("R", (), {"post": staticmethod(
-        lambda *a, **k: _Resp(400, '{"error":"invalid api key"}')), "RequestException": Exception})
     with pytest.raises(SynthesisError) as ei:
         client.place_market_order("t", "BUY", 5.0, 0.59)
-    assert not isinstance(ei.value, OrderNotFillable)
+    msg = str(ei.value)
+    assert "request sent:" in msg and "'token_id': 't'" in msg
+    assert "CF-RAY" in msg and "abc123" in msg

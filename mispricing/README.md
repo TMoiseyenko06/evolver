@@ -76,7 +76,7 @@ backtest is directly comparable to the population's own numbers.
 **Real-money exit execution.** `polybot.synthesis.SynthesisClient.place_market_order`
 always sends `units="USDC"` (dollar-denominated); a share-quantity SELL needs a small
 client extension (`units="SHARES"`), plus a `SynthesisExecutor.close(...)` method, and
-`OrderNotFillable` handled as a normal retry (not a failure) — same discipline as the
-buy-side price guard. This is real, valuable follow-up work, not built here — this
+price-guard rejections handled as a normal retry (not a failure) — same discipline as
+the buy-side price guard. This is real, valuable follow-up work, not built here — this
 package is paper/backtest only until the exit idea is validated on real historical
 and live paper data.

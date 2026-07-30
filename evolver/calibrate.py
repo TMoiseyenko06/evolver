@@ -69,9 +69,9 @@ def place_test_order(market: MarketProvider, real_executor: Executor, side: str,
 
     Returns a dict describing what happened (may have ``fill=None`` if the order
     didn't fill — check ``order.status``/``order.raw`` for why). A raised
-    ``SynthesisError``/``OrderNotFillable`` propagates for the caller to report —
-    its message already includes the exact request sent and any response trace
-    headers (see ``polybot.synthesis.SynthesisClient.place_market_order``).
+    ``SynthesisError`` propagates for the caller to report — its message already
+    includes the exact request sent and any response trace headers (see
+    ``polybot.synthesis.SynthesisClient.place_market_order``).
     """
     handle = market.next_window()
     snap = next(iter(market.poll_snapshots(handle)))
