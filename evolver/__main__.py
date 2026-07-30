@@ -217,6 +217,58 @@ def cmd_calibrate(config: Config, args) -> int:
     return 0
 
 
+def cmd_test_order(config: Config, args) -> int:
+    """Place ONE small real order right now — a direct smoke test of the order-
+    placement pipeline, independent of any strategy signal or the full calibration loop."""
+    stake = args.stake
+    if stake > config.max_live_stake:
+        print(f"ERROR: stake ${stake:.2f} exceeds max_live_stake ${config.max_live_stake:.2f}. "
+              f"Raise Config.max_live_stake if you really mean it.", file=sys.stderr)
+        return 2
+    if not args.yes:
+        print(f"This places ONE REAL ${stake:.2f} {args.side} order on the current live market.\n"
+              "Re-run with --yes to proceed.", file=sys.stderr)
+        return 2
+    if not config.synthesis_api_key or not config.synthesis_wallet_id:
+        print("ERROR: set SYNTHESIS_API_KEY and SYNTHESIS_WALLET_ID (in .env) first.", file=sys.stderr)
+        return 2
+
+    real_executor = build_synthesis_executor(config)
+    ok, detail = real_executor.client.check_reachable()
+    if not ok:
+        print(f"ERROR: Synthesis endpoint preflight failed: {detail}", file=sys.stderr)
+        return 2
+    balance = real_executor.client.get_balance()
+    bal_str = f"${balance:.2f}" if balance is not None else "unknown"
+    print(f"wallet {config.synthesis_wallet_id}  ·  balance {bal_str}")
+    if balance is None:
+        print(f"  (balance raw: {real_executor.client.balance_raw()})")
+
+    market = LiveMarket(config)
+    try:
+        result = calib.place_test_order(market, real_executor, args.side, stake)
+    except Exception as exc:  # noqa: BLE001 — surface the full (enriched) error text
+        print(f"ERROR placing test order: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        market.close()
+
+    fill = result["fill"]
+    order = result["order"]
+    print(f"\n{result['title']}  ({result['window_id']})")
+    print(f"side={result['side']}  displayed ask={result['ask']}")
+    if fill is not None:
+        print(f"FILLED: {fill.shares:.4f} shares @ {fill.avg_price:.4f}, "
+              f"cost ${fill.cost:.2f}, fee ${fill.fee:.4f}")
+    else:
+        status = getattr(order, "status", "") or "?"
+        print(f"NOT FILLED (status={status})")
+    if order is not None:
+        print(f"order_id={getattr(order, 'order_id', '')}  status={getattr(order, 'status', '')}")
+        print(f"raw: {json.dumps(getattr(order, 'raw', {}))[:800]}")
+    return 0
+
+
 def cmd_synthesis_markets(config: Config, args) -> int:
     """Show the 5-minute Bitcoin Up/Down windows Synthesis is currently listing."""
     from polybot import synthesis
@@ -367,6 +419,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("--strategy", default=None, help="name of a stored strategy to drive orders")
     p_cal.add_argument("--yes", action="store_true", help="confirm placing REAL orders with real money")
     p_cal.set_defaults(func=cmd_calibrate)
+
+    p_test = sub.add_parser("test-order", help="place ONE small real order right now (smoke test)")
+    p_test.add_argument("--side", choices=["Up", "Down"], default="Up")
+    p_test.add_argument("--stake", type=float, default=0.25, help="real USDC for the test order (default 0.25)")
+    p_test.add_argument("--yes", action="store_true", help="confirm placing ONE REAL order with real money")
+    p_test.set_defaults(func=cmd_test_order)
 
     sub.add_parser("synthesis-markets",
                    help="list the 5-min Bitcoin Up/Down markets Synthesis is showing"

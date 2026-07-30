@@ -61,6 +61,35 @@ def load_driver(
     return LoadedStrategy.create(DEFAULT_PROBE_SOURCE, 0, config)
 
 
+def place_test_order(market: MarketProvider, real_executor: Executor, side: str, stake: float) -> dict:
+    """Place ONE real order right now — a direct smoke test of the order-placement
+    pipeline itself, independent of any strategy signal, the paper comparison, or
+    waiting for resolution. Grabs the current/next live window, takes its very first
+    poll's book, and immediately buys ``stake`` dollars of ``side``.
+
+    Returns a dict describing what happened (may have ``fill=None`` if the order
+    didn't fill — check ``order.status``/``order.raw`` for why). A raised
+    ``SynthesisError``/``OrderNotFillable`` propagates for the caller to report —
+    its message already includes the exact request sent and any response trace
+    headers (see ``polybot.synthesis.SynthesisClient.place_market_order``).
+    """
+    handle = market.next_window()
+    snap = next(iter(market.poll_snapshots(handle)))
+    token_id = handle.token_map.get(side, "")
+    asks = snap.books.get(side, {}).get("asks", [])
+    fill = real_executor.fill(side, token_id, asks, stake)
+    order = getattr(real_executor, "last_order", None)
+    return {
+        "window_id": handle.window_id,
+        "title": handle.title,
+        "side": side,
+        "token_id": token_id,
+        "ask": asks[0][0] if asks else None,
+        "fill": fill,
+        "order": order,
+    }
+
+
 def run_calibration(
     market: MarketProvider,
     real_executor: Executor,
