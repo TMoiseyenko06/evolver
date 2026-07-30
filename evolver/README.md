@@ -43,7 +43,7 @@ offline against a mock market in tests.
 ## How it works
 
 1. **Generate.** `OpenRouterClient` (key from `OPENROUTER_API_KEY`, model
-   configurable, default `anthropic/claude-opus-4.8`) is prompted to emit
+   configurable, default `anthropic/claude-fable-5`) is prompted to emit
    `population_size` (=10) strategies as Python `class Strategy` blocks.
 2. **Forward-test.** All strategies run simultaneously over one **generation = 50
    resolved windows**. Every strategy sees the *same* data each poll: one shared
@@ -357,7 +357,7 @@ the one command that touches real funds.
   If the alive count is below `population_size` (e.g. you raised the target), the
   resumed run breeds up to the target *before* running the generation rather than
   waiting a full cycle.
-- **Default model** is `anthropic/claude-opus-4.8`; override with `EVOLVER_MODEL`
+- **Default model** is `anthropic/claude-fable-5`; override with `EVOLVER_MODEL`
   or `Config.model`.
 
 ---
@@ -371,7 +371,7 @@ it in. Real environment variables take precedence over `.env` values.
 | env var | meaning |
 |---|---|
 | `OPENROUTER_API_KEY` | required for `run` |
-| `EVOLVER_MODEL` | OpenRouter model slug (default `anthropic/claude-opus-4.8`) |
+| `EVOLVER_MODEL` | OpenRouter model slug (default `anthropic/claude-fable-5`) |
 | `EVOLVER_DATA_DIR` | where `evolver.sqlite`, `runs/`, `strategies/` live (default `.`) |
 
 ```bash

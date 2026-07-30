@@ -86,7 +86,7 @@ def _llm():
         from evolver.openrouter import OpenRouterClient
         return OpenRouterClient(
             api_key=key,
-            model=os.environ.get("EVOLVER_MODEL", "anthropic/claude-opus-4.8"),
+            model=os.environ.get("EVOLVER_MODEL", "anthropic/claude-fable-5"),
             base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         )
     except Exception:  # noqa: BLE001
