@@ -202,6 +202,26 @@ class MockMarket:
         raise KeyError(window_id)
 
 
+def dense_window_spec(window_id: str, resolved_side: str, polls: List[PollSpec],
+                      title: Optional[str] = None) -> WindowSpec:
+    """A WindowSpec from a caller-supplied poll sequence (any length/shape).
+
+    ``default_window_specs()`` below only has 2 polls/window (open + late) — enough
+    for single-entry strategies, but too sparse to exercise anything that needs
+    several intermediate polls (e.g. an early-exit strategy watching for a trigger
+    across many polls after entry). This is a generically useful capability for any
+    such strategy's tests, not specific to one — the actual scenario data (candle
+    shapes, ask/bid sequences) stays local to whichever test file needs it.
+    """
+    return WindowSpec(
+        window_id=window_id,
+        title=title or f"Bitcoin Up or Down - dense ({window_id})",
+        coinbase_side=resolved_side,
+        official_side=resolved_side,
+        polls=polls,
+    )
+
+
 def default_window_specs() -> List[WindowSpec]:
     """Four windows: three resolve Up, one resolves Down.
 

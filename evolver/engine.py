@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from polybot import fees
 
-from .models import Book, Fill, Level, TradeResult
+from .models import Book, ExitFill, ExitTradeResult, Fill, Level, TradeResult
 
 
 def walk_ask_book(asks: List[Level], stake: float, participation: float = 1.0) -> tuple:
@@ -159,6 +159,77 @@ def simulate_fill(
         return None  # the real order's price guard would reject this fill
     fee = fees.fee(shares, avg_price)
     return Fill(side=side, shares=shares, cost=cost, avg_price=avg_price, fee=fee)
+
+
+def walk_bid_book(bids: List[Level], shares: float, participation: float = 1.0) -> tuple:
+    """Walk the descending bid book selling up to ``shares`` shares.
+
+    Symmetric to :func:`walk_ask_book`: best (highest) price first, same
+    ``participation`` depth cap (displayed size at a level is not all real or all
+    ours). Returns ``(shares_sold, proceeds, avg_price)``. If the book can't absorb
+    the full ``shares`` requested, ``shares_sold < shares`` (thin book) — mirrors
+    ``walk_ask_book``'s partial-fill contract exactly, just selling instead of buying.
+    """
+    part = 1.0 if participation is None else max(0.0, min(1.0, participation))
+    remaining = shares
+    sold = 0.0
+    proceeds = 0.0
+    for price, size in sorted(bids, key=lambda x: x[0], reverse=True):
+        if remaining <= 1e-12 or price <= 0:
+            break
+        avail = size * part
+        if avail <= 0:
+            continue
+        take = min(avail, remaining)
+        sold += take
+        proceeds += take * price
+        remaining -= take
+    avg_price = (proceeds / sold) if sold > 0 else 0.0
+    return sold, proceeds, avg_price
+
+
+def simulate_exit_fill(
+    side: str,
+    bids: List[Level],
+    shares: float,
+    participation: float = 1.0,
+) -> Optional[ExitFill]:
+    """Simulate selling ``shares`` of ``side`` by walking its bid book (close early).
+
+    Charges ``polybot.fees.fee(shares_sold, avg_price)`` on the sale — the SAME fee
+    curve :func:`simulate_fill` charges on entry, applied symmetrically (the paper
+    sim still models Polymarket's taker-fee curve on exits even though live
+    calibration showed real fees are effectively $0 — that's a live-execution
+    tailwind, not a reason to under-model the paper accounting). Returns ``None`` if
+    nothing could be sold (empty/zero-price book).
+    """
+    sold, proceeds, avg_price = walk_bid_book(bids, shares, participation)
+    if sold <= 0:
+        return None
+    fee = fees.fee(sold, avg_price)
+    return ExitFill(side=side, shares=sold, proceeds=proceeds, avg_price=avg_price, fee=fee)
+
+
+def score_exit_trade(
+    strategy_name: str,
+    window_id: str,
+    entry_fill: Fill,
+    exit_fill: ExitFill,
+    exit_reason: str,
+) -> ExitTradeResult:
+    """Net P&L for a round trip closed BEFORE resolution — the early-exit
+    counterpart to :func:`score_trade` (no ``resolved_side`` needed since the
+    position is already closed): ``net_pnl = (proceeds - exit fee) - (cost + entry fee)``.
+    """
+    net_pnl = (exit_fill.proceeds - exit_fill.fee) - (entry_fill.cost + entry_fill.fee)
+    return ExitTradeResult(
+        strategy_name=strategy_name,
+        window_id=window_id,
+        entry_fill=entry_fill,
+        exit_fill=exit_fill,
+        exit_reason=exit_reason,
+        net_pnl=net_pnl,
+    )
 
 
 def score_trade(strategy_name: str, window_id: str, fill: Fill, resolved_side: str) -> TradeResult:

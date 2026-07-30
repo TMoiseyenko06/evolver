@@ -248,3 +248,85 @@ def test_participation_walks_to_next_level_when_capped():
     shares, cost, avg = walk_ask_book(asks, 10.0, participation=0.25)
     assert cost == pytest.approx(10.0)          # still fills (deep second level)
     assert avg > 0.40                            # but at a worse average price
+
+
+# --- bid-side (exit) fills — symmetric to the ask-side (entry) cases above ------- #
+def test_walk_bid_book_single_level():
+    from evolver.engine import walk_bid_book
+
+    sold, proceeds, avg = walk_bid_book([(0.50, 1000)], 20.0)
+    assert sold == pytest.approx(20.0)
+    assert proceeds == pytest.approx(10.0)
+    assert avg == pytest.approx(0.50)
+
+
+def test_walk_bid_book_consumes_highest_price_first_then_partial():
+    from evolver.engine import walk_bid_book
+
+    # Selling 20 shares against (0.40, 10 sh) then (0.60, ...) for the remaining 10.
+    sold, proceeds, avg = walk_bid_book([(0.40, 100), (0.60, 10)], 20.0)
+    # Highest price (0.60) consumed first: 10 sh @0.60=$6, then 10 sh @0.40=$4.
+    assert sold == pytest.approx(20.0)
+    assert proceeds == pytest.approx(10.0)
+    assert avg == pytest.approx(0.50)
+
+
+def test_walk_bid_book_thin_book_sells_less_than_requested():
+    from evolver.engine import walk_bid_book
+
+    sold, proceeds, avg = walk_bid_book([(0.50, 4)], 20.0)  # only 4 shares available
+    assert sold == pytest.approx(4.0)
+    assert proceeds == pytest.approx(2.0)
+
+
+def test_walk_bid_book_participation_caps_thin_exit():
+    from evolver.engine import walk_bid_book
+
+    # Symmetric to the entry-side participation cap: only a fraction of displayed
+    # bid size is assumed executable, so a thin exit gets a partial close.
+    sold, proceeds, avg = walk_bid_book([(0.50, 100)], 100.0, participation=0.25)
+    assert sold == pytest.approx(25.0)
+    assert proceeds == pytest.approx(12.5)
+
+
+def test_simulate_exit_fill_applies_fee_at_avg_price():
+    from evolver.engine import simulate_exit_fill
+
+    exit_fill = simulate_exit_fill("Up", [(0.50, 1000)], 20.0)
+    assert exit_fill is not None
+    assert exit_fill.shares == pytest.approx(20.0)
+    assert exit_fill.proceeds == pytest.approx(10.0)
+    assert exit_fill.fee == pytest.approx(fees.fee(20.0, 0.50))
+
+
+def test_simulate_exit_fill_empty_book_returns_none():
+    from evolver.engine import simulate_exit_fill
+
+    assert simulate_exit_fill("Up", [], 20.0) is None
+
+
+def test_score_exit_trade_winning_round_trip():
+    from evolver.engine import score_exit_trade
+
+    entry = Fill(side="Up", shares=20.0, cost=10.0, avg_price=0.50, fee=0.312)
+    exit_fill = simulate_exit_fill_helper(side="Up", price=0.60, shares=20.0)
+    trade = score_exit_trade("s", "w", entry, exit_fill, "gap_closed")
+    # Bought $10 worth at 0.50, sold at 0.60 -> proceeds $12, minus fees, minus $10 cost.
+    assert trade.net_pnl == pytest.approx((12.0 - exit_fill.fee) - (10.0 + 0.312))
+    assert trade.exit_reason == "gap_closed"
+
+
+def test_score_exit_trade_losing_round_trip():
+    from evolver.engine import score_exit_trade
+
+    entry = Fill(side="Up", shares=20.0, cost=10.0, avg_price=0.50, fee=0.312)
+    exit_fill = simulate_exit_fill_helper(side="Up", price=0.40, shares=20.0)
+    trade = score_exit_trade("s", "w", entry, exit_fill, "adverse_move")
+    assert trade.net_pnl < 0
+    assert trade.exit_reason == "adverse_move"
+
+
+def simulate_exit_fill_helper(side, price, shares):
+    from evolver.engine import simulate_exit_fill
+
+    return simulate_exit_fill(side, [(price, shares * 2)], shares)

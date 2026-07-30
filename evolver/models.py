@@ -106,6 +106,49 @@ class Fill:
 
 
 @dataclass
+class ExitFill:
+    """The simulated result of walking the BID book to close a position early —
+    the symmetric counterpart to :class:`Fill` (which walks the ask book to enter)."""
+
+    side: str
+    shares: float  # shares actually sold (== position size for a full close)
+    proceeds: float  # dollars received
+    avg_price: float
+    fee: float
+
+    def to_json(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExitTradeResult:
+    """A position closed BEFORE resolution, scored against its own entry fill.
+
+    Unlike :class:`TradeResult` (which scores a held-to-resolution fill against the
+    resolved side, paying $1 or $0 per share), this needs no resolved side at all —
+    the position was already closed, so P&L is just proceeds minus cost, each net
+    of its own fee.
+    """
+
+    strategy_name: str
+    window_id: str
+    entry_fill: Fill
+    exit_fill: ExitFill
+    exit_reason: str  # "gap_closed" | "time_expired" | "adverse_move"
+    net_pnl: float
+
+    def to_json(self) -> dict:
+        return {
+            "strategy_name": self.strategy_name,
+            "window_id": self.window_id,
+            "entry_fill": self.entry_fill.to_json(),
+            "exit_fill": self.exit_fill.to_json(),
+            "exit_reason": self.exit_reason,
+            "net_pnl": self.net_pnl,
+        }
+
+
+@dataclass
 class Decision:
     """One strategy's decision at one poll (including passes)."""
 
