@@ -112,12 +112,24 @@ class SynthesisClient:
                 f"SYNTHESIS_BASE_URL (should be https://synthesis.trade): {resp.text[:200]}"
             )
         if resp.status_code >= 400:
-            body = resp.text[:400]
-            if _is_not_fillable(body):
+            resp_body = resp.text[:800]
+            if _is_not_fillable(resp_body):
                 raise OrderNotFillable(
-                    f"not fillable within price cap {slippage_cap}: {body}"
+                    f"not fillable within price cap {slippage_cap}: {resp_body}"
                 )
-            raise SynthesisError(f"order rejected {resp.status_code}: {body}")
+            # Include the exact request we sent and any request-id/trace-id style
+            # response headers — a generic body like "Failed to create order" gives
+            # no clue on its own whether OUR request was malformed or the venue had
+            # an internal issue; this makes the next occurrence self-diagnosing and
+            # gives something concrete to hand to Synthesis support.
+            trace_headers = {
+                k: v for k, v in resp.headers.items()
+                if any(t in k.lower() for t in ("request-id", "trace", "ray", "correlation"))
+            }
+            raise SynthesisError(
+                f"order rejected {resp.status_code}: {resp_body} | request sent: {body} "
+                f"| response headers: {trace_headers or dict(resp.headers)}"
+            )
         return parse_order(resp.json())
 
     def get_order(self, order_id: str) -> Dict[str, Any]:

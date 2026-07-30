@@ -349,6 +349,7 @@ def test_not_fillable_is_classified_separately():
     class _Resp:
         def __init__(self, code, text):
             self.status_code, self.text = code, text
+            self.headers = {}
 
     import polybot.synthesis as syn
     client = SynthesisClient(api_key="k", wallet_id="w")
