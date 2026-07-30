@@ -92,9 +92,14 @@ def run_window(
             other = "Down" if side == "Up" else "Up"
             comp_bids = snap.books.get(other, {}).get("bids", []) if config.use_cross_book_fill else None
             fill = simulate_fill(side, asks, config.stake, comp_bids,
-                                 config.slippage_coeff, config.slippage_exp)
+                                 config.slippage_coeff, config.slippage_exp,
+                                 max_slippage=config.max_slippage)
             if fill is None:
-                decisions[-1] = Decision(strat.name, snap.poll_index, action, "empty book / no fill")
+                # Either an empty book, or the order would walk further above the best
+                # ask than the live executor's price guard allows — in which case the
+                # real order wouldn't fill either, so the strategy simply doesn't trade.
+                reason = "empty book / no fill" if not asks else "price guard: fill too far above best ask"
+                decisions[-1] = Decision(strat.name, snap.poll_index, action, reason)
                 continue
             fills[strat.name] = fill
             strat.entered_this_window = True
