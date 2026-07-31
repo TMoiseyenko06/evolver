@@ -34,6 +34,7 @@ def _params_from_args(args) -> MispricingParams:
         fee_margin=args.fee_margin,
         time_expired_seconds=args.time_expired_seconds,
         gap_closed_min_gain=args.gap_closed_min_gain,
+        exits_enabled=not args.no_exits,
     )
 
 
@@ -110,9 +111,10 @@ def cmd_paper(args) -> int:
     config.starting_bankroll = args.bankroll
     params = _params_from_args(args)
     market = LiveMarket(config)
+    exits_desc = (f"gap_closed/time_expired({params.time_expired_seconds}s)/adverse_move"
+                 if params.exits_enabled else "DISABLED (hold to resolution)")
     print(f"Paper-trading the mispricing strategy · bankroll ${args.bankroll:.0f} · "
-          f"entry_gap {params.entry_gap} · exits: gap_closed/time_expired({params.time_expired_seconds}s)"
-          f"/adverse_move · Ctrl-C to stop.\n")
+          f"entry_gap {params.entry_gap} · exits: {exits_desc} · Ctrl-C to stop.\n")
     try:
         book = pp.run_paper(market, config, params, max_windows=args.max_windows)
     except KeyboardInterrupt:
@@ -136,6 +138,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--fee-margin", type=float, default=0.05)
         p.add_argument("--time-expired-seconds", type=float, default=60.0)
         p.add_argument("--gap-closed-min-gain", type=float, default=0.0)
+        p.add_argument("--no-exits", action="store_true",
+                       help="hold every position to resolution — never check the early-exit triggers")
 
     def add_fill_flags(p):
         p.add_argument("--stake", type=float, default=10.0)
