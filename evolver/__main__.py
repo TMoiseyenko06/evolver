@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from . import calibrate as calib
+from . import paper as paper_mod
 from . import tune as tuner
 from .config import Config
 from .env import find_dotenv, load_dotenv
@@ -193,6 +194,36 @@ def cmd_replay_sweep(config: Config, args) -> int:
         s = result.stats
         row = "".join(f"{params[n]:>13.4f}" for n in names)
         print(f"{row}{s.trades:>8}{s.wins:>6}{s.hit_pct*100:>6.1f}%{s.net_pnl:>+12.2f}")
+    return 0
+
+
+def cmd_paper(config: Config, args) -> int:
+    """Live paper-trading loop for ONE strategy — no real money, no population."""
+    config.live_stake = args.stake
+    if args.bankroll is not None:
+        config.starting_bankroll = args.bankroll
+    store = Store(config)
+    try:
+        driver = calib.load_driver(config, store, args.strategy_file, args.strategy)
+    except (SandboxError, ValueError, FileNotFoundError) as exc:
+        print(f"ERROR loading driver strategy: {exc}", file=sys.stderr)
+        store.close()
+        return 1
+    store.close()
+
+    print(f"Paper-trading '{driver.name}' · stake ${args.stake:.2f} · "
+          f"bankroll ${config.starting_bankroll:.2f} · Ctrl-C to stop.\n")
+    market = LiveMarket(config)
+    try:
+        book = paper_mod.run_paper_strategy(market, driver, config, max_windows=args.max_windows)
+    except KeyboardInterrupt:
+        book = None
+        print("\nInterrupted.")
+    finally:
+        market.close()
+    if args.report and book is not None:
+        paper_mod.write_report(book, driver.name, args.report)
+        print(f"Report written to {args.report}")
     return 0
 
 
@@ -466,6 +497,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_rsweep.add_argument("--recent", type=int, default=500, help="most recent N archived windows")
     p_rsweep.add_argument("--generations", default=None, help="comma-separated generation numbers")
     p_rsweep.set_defaults(func=cmd_replay_sweep)
+
+    p_paper = sub.add_parser("paper", help="live paper-trading loop for ONE strategy (no real money)")
+    p_paper.add_argument("--stake", type=float, default=10.0, help="paper USDC per trade")
+    p_paper.add_argument("--bankroll", type=float, default=None, help="starting paper bankroll (default: Config.starting_bankroll)")
+    p_paper.add_argument("--strategy-file", default=None, help="path to a .py driver strategy")
+    p_paper.add_argument("--strategy", default=None, help="name of a stored strategy to drive")
+    p_paper.add_argument("--max-windows", type=int, default=None)
+    p_paper.add_argument("--report", default=None, help="write an end-of-run markdown summary here")
+    p_paper.set_defaults(func=cmd_paper)
 
     p_cal = sub.add_parser("calibrate", help="place real $-stake orders vs paper to measure sim accuracy")
     p_cal.add_argument("--trades", type=int, default=None, help="number of real trades to collect")
