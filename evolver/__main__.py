@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 import sys
+from pathlib import Path
 
 from . import calibrate as calib
 from . import tune as tuner
@@ -148,6 +149,50 @@ def cmd_replay(config: Config, args) -> int:
         print(f"  recorded lifetime net_pnl=${rec_pnl:+.2f} "
               f"({'MATCH — deterministic' if match else 'differs'})")
     store.close()
+    return 0
+
+
+def cmd_replay_sweep(config: Config, args) -> int:
+    """Sweep a hand-templated {{param}} strategy across explicit value lists, against
+    the SAME set of already-collected windows — the evolved-strategy equivalent of
+    `mispricing sweep`, built on the existing replay_strategy + tune.render_template."""
+    template = Path(args.strategy_file).read_text(encoding="utf-8")
+    grid = json.loads(Path(args.params).read_text(encoding="utf-8"))
+    if not grid:
+        print("ERROR: --params JSON must map at least one {{param}} name to a list of values.",
+              file=sys.stderr)
+        return 2
+
+    store = Store(config)
+    if args.generations:
+        gens = [int(g) for g in args.generations.split(",")]
+        windows = store.windows_for_generations(gens)
+    else:
+        windows = store.recent_windows(args.recent)
+    store.close()
+    if not windows:
+        print("No archived windows found — is EVOLVER_DATA_DIR pointed at a populated run?",
+              file=sys.stderr)
+        return 1
+
+    variants = tuner.sweep_variants(grid)
+    names = list(grid.keys())
+    print(f"=== replay-sweep over {len(windows)} window(s) ===\n")
+    print("".join(n[:12].rjust(13) for n in names)
+          + f"{'trades':>8}{'wins':>6}{'hit%':>7}{'net_pnl':>12}")
+    for params in variants:
+        source = tuner.render_template(template, params)
+        if "{{" in source:
+            print(f"SKIP (unfilled placeholder) params={params}", file=sys.stderr)
+            continue
+        try:
+            result = replay_strategy(source, windows, config)
+        except SandboxError as exc:
+            print(f"SKIP (sandbox error: {exc}) params={params}", file=sys.stderr)
+            continue
+        s = result.stats
+        row = "".join(f"{params[n]:>13.4f}" for n in names)
+        print(f"{row}{s.trades:>8}{s.wins:>6}{s.hit_pct*100:>6.1f}%{s.net_pnl:>+12.2f}")
     return 0
 
 
@@ -411,6 +456,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay = sub.add_parser("replay", help="re-score a strategy against archived windows")
     p_replay.add_argument("name")
     p_replay.set_defaults(func=cmd_replay)
+
+    p_rsweep = sub.add_parser("replay-sweep",
+                              help="sweep a {{param}}-templated strategy's numeric thresholds "
+                                   "against archived windows")
+    p_rsweep.add_argument("--strategy-file", required=True, help="template .py with {{param}} placeholders")
+    p_rsweep.add_argument("--params", required=True,
+                          help="JSON file mapping each {{param}} name to a list of values to try")
+    p_rsweep.add_argument("--recent", type=int, default=500, help="most recent N archived windows")
+    p_rsweep.add_argument("--generations", default=None, help="comma-separated generation numbers")
+    p_rsweep.set_defaults(func=cmd_replay_sweep)
 
     p_cal = sub.add_parser("calibrate", help="place real $-stake orders vs paper to measure sim accuracy")
     p_cal.add_argument("--trades", type=int, default=None, help="number of real trades to collect")

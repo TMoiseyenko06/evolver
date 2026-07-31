@@ -69,6 +69,15 @@ def sample_params(specs: List[ParamSpec], rng: random.Random) -> Dict[str, float
     return {s.name: _coerce(s, rng.uniform(s.lo, s.hi)) for s in specs}
 
 
+def sweep_variants(param_grid: Dict[str, List[float]]) -> List[Dict[str, float]]:
+    """Cartesian product of an explicit value grid (e.g. from a hand-picked list of
+    values to try per parameter, as opposed to the min/max ranges the evolutionary
+    tuner samples from)."""
+    import itertools
+    names = list(param_grid.keys())
+    return [dict(zip(names, combo)) for combo in itertools.product(*(param_grid[n] for n in names))]
+
+
 def mutate_params(base: Dict[str, float], specs: List[ParamSpec],
                   rng: random.Random, sigma: float = 0.2) -> Dict[str, float]:
     """Gaussian nudge each param by ``sigma`` of its range, clamped to bounds."""
