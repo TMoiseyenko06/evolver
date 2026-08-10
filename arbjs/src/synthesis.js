@@ -45,28 +45,62 @@ export function num(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function levels(raw, descending) {
+    const out = [];
+    if (Array.isArray(raw)) {
+        for (const level of raw) {
+            if (Array.isArray(level) && level.length >= 2) out.push([num(level[0]), num(level[1])]);
+            else if (level && typeof level === 'object') out.push([num(level.price), num(level.size)]);
+        }
+    } else if (raw && typeof raw === 'object') {
+        for (const [price, size] of Object.entries(raw)) out.push([num(price), num(size)]);
+    }
+    return out
+        .filter(([price, size]) => price > 0 && size > 0)
+        .sort((a, b) => (descending ? b[0] - a[0] : a[0] - b[0]));
+}
+
 /** Convert a Synthesis orderbook (price->size maps, or level lists) to sorted levels. */
 export function parseOrderbook(entry) {
     const body = unwrap(entry);
     const book = body && typeof body === 'object' && body.orderbook ? body.orderbook : body;
     if (!book || typeof book !== 'object') return { asks: [], bids: [] };
-
-    const levels = (raw, descending) => {
-        const out = [];
-        if (Array.isArray(raw)) {
-            for (const level of raw) {
-                if (Array.isArray(level) && level.length >= 2) out.push([num(level[0]), num(level[1])]);
-                else if (level && typeof level === 'object') out.push([num(level.price), num(level.size)]);
-            }
-        } else if (raw && typeof raw === 'object') {
-            for (const [price, size] of Object.entries(raw)) out.push([num(price), num(size)]);
-        }
-        return out
-            .filter(([price, size]) => price > 0 && size > 0)
-            .sort((a, b) => (descending ? b[0] - a[0] : a[0] - b[0]));
-    };
-
     return { asks: levels(book.asks, false), bids: levels(book.bids, true) };
+}
+
+/**
+ * Normalize one batch-orderbook entry into `[bookKey, {asks, bids}]` pairs.
+ *
+ * The two venues answer in different shapes, and are addressed by different ids:
+ *
+ * - **Polymarket** is requested by `token_id` and returns one flat book per
+ *   token: `{orderbook: {token_id, bids, asks}}`.
+ * - **Kalshi** is requested by `market_id` — its token ids return nothing at all —
+ *   and returns BOTH sides in one entry: `{orderbook: {market_id, yes: {bids,
+ *   asks}, no: {bids, asks}}}`. Those become two books keyed `market_id:yes`
+ *   and `market_id:no`.
+ *
+ * The `bookKey` each produces is what callers look books up by, so the rest of
+ * the code never has to care which venue a quote came from.
+ */
+export function normalizeBookEntry(entry) {
+    const body = unwrap(entry);
+    const book = (body && typeof body === 'object' && body.orderbook) || body;
+    if (!book || typeof book !== 'object') return [];
+
+    if (book.yes || book.no) {
+        const marketId = String(pick(book, ['market_id', 'marketId'], ''));
+        if (!marketId) return [];
+        return ['yes', 'no']
+            .filter((side) => book[side])
+            .map((side) => [`${marketId}:${side}`, {
+                asks: levels(book[side].asks, false),
+                bids: levels(book[side].bids, true),
+            }]);
+    }
+
+    const token = String(pick(book, ['token_id', 'tokenId', 'asset_id', 'id'], ''));
+    return token ? [[token, { asks: levels(book.asks, false), bids: levels(book.bids, true) }]] : [];
 }
 
 function pick(body, keys, fallback = null) {
@@ -92,6 +126,35 @@ export function parseOrder(data) {
         matched: ['MATCHED', 'FILLED', 'COMPLETE', 'COMPLETED'].includes(status.toUpperCase()),
         raw: data,
     };
+}
+
+/**
+ * Read a market's settlement out of a `GET /api/v1/{venue}/market/{id}` response.
+ *
+ * The body is `{event, market}`. `winner_token_id` names the side that paid $1;
+ * when it's absent on a resolved market, a side priced at ~1 is the fallback.
+ */
+export function parseResolution(payload) {
+    const body = unwrap(payload);
+    const market = (body && typeof body === 'object' && body.market) || body || {};
+    return {
+        resolved: Boolean(market.resolved),
+        winnerTokenId: String(market.winner_token_id || ''),
+        leftTokenId: String(market.left_token_id || ''),
+        rightTokenId: String(market.right_token_id || ''),
+        leftPrice: num(market.left_price),
+        rightPrice: num(market.right_price),
+    };
+}
+
+/** Did `tokenId` win? Returns true/false, or null when the market hasn't settled. */
+export function tokenWon(resolution, tokenId) {
+    if (!resolution || !resolution.resolved) return null;
+    const token = String(tokenId);
+    if (resolution.winnerTokenId) return resolution.winnerTokenId === token;
+    if (resolution.leftTokenId === token) return resolution.leftPrice >= 0.99;
+    if (resolution.rightTokenId === token) return resolution.rightPrice >= 0.99;
+    return null;
 }
 
 export function parseFee(fee) {
@@ -154,9 +217,14 @@ export class SynthesisClient {
         return this.request('POST', '/api/v1/markets/orderbooks', { body: tokenIds.map(String) });
     }
 
-    /** Batch-fetch books for many tokens; returns Map(token_id -> {asks, bids}). */
-    async fetchBooks(tokenIds, batchSize = 100) {
-        const unique = [...new Set(tokenIds.filter(Boolean).map(String))];
+    /**
+     * Batch-fetch books, returning Map(bookKey -> {asks, bids}).
+     *
+     * `ids` are Polymarket token ids and/or Kalshi market ids — see
+     * {@link normalizeBookEntry} for the two shapes and the keys they produce.
+     */
+    async fetchBooks(ids, batchSize = 100) {
+        const unique = [...new Set(ids.filter(Boolean).map(String))];
         const books = new Map();
         for (let i = 0; i < unique.length; i += batchSize) {
             const chunk = unique.slice(i, i + batchSize);
@@ -169,14 +237,20 @@ export class SynthesisClient {
             }
             for (const entry of asList(unwrap(payload))) {
                 if (!entry || typeof entry !== 'object') continue;
-                // The batch endpoint answers with {venue, orderbook: {token_id, bids, asks}},
-                // so the id identifying the book lives inside `orderbook`, not beside it.
-                const keys = ['token_id', 'tokenId', 'asset_id', 'id'];
-                const token = String(pick(entry.orderbook, keys) ?? pick(entry, keys, ''));
-                if (token) books.set(token, parseOrderbook(entry));
+                for (const [key, book] of normalizeBookEntry(entry)) books.set(key, book);
             }
         }
         return books;
+    }
+
+    /**
+     * One market by id, the only place resolution can be read.
+     *
+     * Resolved markets drop out of `GET /api/v1/markets` entirely, so a settled
+     * position can't be found by re-listing — it has to be looked up directly.
+     */
+    async getMarket(venue, marketId) {
+        return this.request('GET', `/api/v1/${venue}/market/${encodeURIComponent(marketId)}`);
     }
 
     walletPath(segment, suffix = '') {

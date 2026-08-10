@@ -27,7 +27,10 @@ export const config = {
     slippageCapCents: envNum('ARBJS_SLIPPAGE_CAP_CENTS', 1),
 
     // --- Universe ----------------------------------------------------------
-    maxMarketsPerVenue: envNum('ARBJS_MAX_MARKETS', 2000),
+    // 0 = no cap: page both venues to exhaustion (~127k Polymarket, ~44k Kalshi
+    // markets, ~30s). Arbs hide in the thin tail, so the whole universe is the
+    // default and a cap is only for quick tests.
+    maxMarketsPerVenue: envNum('ARBJS_MAX_MARKETS', 0),
     pageSize: envNum('ARBJS_PAGE_SIZE', 250),
     // Substring filter on market titles, e.g. 'bitcoin' — narrows the scan to one
     // family of markets the way the old market-URL config did.
@@ -45,4 +48,10 @@ export const config = {
     tradeAmountCents: envNum('ARBJS_TRADE_CENTS', 500),
     yoloTradeAmountCents: envNum('ARBJS_YOLO_TRADE_CENTS', 1000),
     maxSetsPerArb: envNum('ARBJS_MAX_SETS', 200),
+
+    // --- Paper trading (npm run paper) --------------------------------------
+    paperBankrollCents: envNum('ARBJS_PAPER_BANKROLL_CENTS', 50000), // $500
+    // Cap on ONE arbitrage: both legs combined, fees included.
+    paperMaxArbCostCents: envNum('ARBJS_PAPER_MAX_ARB_CENTS', 10000), // $100
+    paperStatePath: process.env.ARBJS_PAPER_STATE || 'paper-state.json',
 };

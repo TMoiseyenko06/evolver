@@ -31,9 +31,22 @@ function parseMarket(market, venue, eventId) {
     const sides = orientSides(left, right);
     if (!sides) return null;
 
+    // Kalshi books are addressed by market id and carry both sides in one entry;
+    // Polymarket's are addressed per token. See normalizeBookEntry.
+    const isKalshi = String(venue).toLowerCase() === 'kalshi';
+    const yesBookKey = isKalshi ? `${marketId}:yes` : String(sides.yes.token);
+    const noBookKey = isKalshi ? `${marketId}:no` : String(sides.no.token);
+    const yesBookRequestId = isKalshi ? String(marketId) : String(sides.yes.token);
+    const noBookRequestId = isKalshi ? String(marketId) : String(sides.no.token);
+
     return {
         title: String(market.title || market.question || ''),
         marketId: String(marketId),
+        yesBookKey,
+        noBookKey,
+        yesBookRequestId,
+        noBookRequestId,
+        bookRequestIds: [...new Set([yesBookRequestId, noBookRequestId])],
         eventId: String(eventId || market.event_id || ''),
         platform: venue,
         endsAt: market.ends_at ?? null,
@@ -76,8 +89,8 @@ export function parseOutcomes(payload, venue) {
 /** Fill each outcome's executable ask / best bid / depth from fetched books (in place). */
 export function applyBooks(outcomes, books) {
     for (const outcome of outcomes) {
-        const yes = books.get(outcome.yesId) || { asks: [], bids: [] };
-        const no = books.get(outcome.noId) || { asks: [], bids: [] };
+        const yes = books.get(outcome.yesBookKey) || { asks: [], bids: [] };
+        const no = books.get(outcome.noBookKey) || { asks: [], bids: [] };
         const yesAsk = yes.asks[0]?.[0] ?? null;
         const noAsk = no.asks[0]?.[0] ?? null;
         const yesBid = yes.bids[0]?.[0] ?? null;
@@ -112,20 +125,31 @@ export class ArbitrageBot {
         return platform === 'polymarket' ? this.config.polymarketWalletSegment : this.config.kalshiWalletSegment;
     }
 
+    /**
+     * Page a venue's listing to exhaustion.
+     *
+     * Arbs live in thin, low-volume markets, so the tail is the interesting part
+     * and the default is the entire universe (~127k Polymarket, ~44k Kalshi).
+     * The listing carries only unresolved markets, and paging ends on a short
+     * page. `maxMarketsPerVenue` is a cap for testing, not a target.
+     */
     async listVenue(venue) {
         const outcomes = [];
         const page = this.config.pageSize;
-        for (let offset = 0; outcomes.length < this.config.maxMarketsPerVenue; offset += page) {
+        const cap = this.config.maxMarketsPerVenue || Infinity;
+        for (let offset = 0; outcomes.length < cap; offset += page) {
             const payload = await this.synthesis.listMarkets({ venue, limit: page, offset });
-            const parsed = parseOutcomes(payload, venue);
-            for (const outcome of parsed) {
+            const events = asList(unwrap(payload));
+            for (const outcome of parseOutcomes(payload, venue)) {
                 if (outcome.resolved) continue;
                 if (this.config.titleFilter && !outcome.title.toLowerCase().includes(this.config.titleFilter)) continue;
                 outcomes.push(outcome);
             }
-            if (parsed.length < page) break; // short page => end of the listing
+            // The page size bounds EVENTS, not the markets nested inside them, so
+            // exhaustion is a short page of events — not a short list of outcomes.
+            if (events.length < page) break;
         }
-        return outcomes.slice(0, this.config.maxMarketsPerVenue);
+        return cap === Infinity ? outcomes : outcomes.slice(0, cap);
     }
 
     async fetchMarkets() {
@@ -137,8 +161,9 @@ export class ArbitrageBot {
     }
 
     async attachBooks(outcomes) {
-        const books = await this.synthesis.fetchBooks(outcomes.flatMap((o) => [o.yesId, o.noId]));
+        const books = await this.synthesis.fetchBooks(outcomes.flatMap((o) => o.bookRequestIds));
         applyBooks(outcomes, books);
+        return books;
     }
 
     async executeTrade(platform, tokenId, side, shares, priceCents) {
@@ -289,39 +314,52 @@ export class ArbitrageBot {
         this.currentPosition.legged = true;
     }
 
+    /**
+     * One full scan: list both venues, match events, price the matched pairs.
+     *
+     * Shared by the live loop and the paper trader, so both act on exactly the
+     * same opportunities and any difference between them is the execution, not
+     * the signal.
+     */
+    async scanOpportunities() {
+        const { polymarketOutcomes, kalshiOutcomes } = await this.fetchMarkets();
+        const matches = matchOutcomes(polymarketOutcomes, kalshiOutcomes, this.config.matchingThreshold);
+        const matched = matches.flatMap((m) => [m.polymarket, m.kalshi]);
+        await this.attachBooks(matched);
+        // Report book coverage: a venue that serves no books can't be priced, and
+        // that reads as "no arbs" forever unless it's visible.
+        const priced = matched.filter((o) => o.yesPrice != null && o.noPrice != null).length;
+        console.log(`[SCAN] ${polymarketOutcomes.length} polymarket / ${kalshiOutcomes.length} kalshi markets `
+            + `-> ${matches.length} matched pairs, books on ${priced}/${matched.length} sides`);
+
+        const opportunities = findArbitrageOpportunities(matches, this.config.minProfitCents)
+            .filter((opp) => {
+                // Skip markets where any side is at or below the threshold: a
+                // near-zero quote is usually a stale book, not a real offer.
+                const prices = [
+                    opp.polymarketOutcome.yesPrice, opp.polymarketOutcome.noPrice,
+                    opp.kalshiOutcome.yesPrice, opp.kalshiOutcome.noPrice,
+                ];
+                return prices.every((p) => p != null && p > this.config.minPriceThreshold);
+            })
+            .map((opp) => ({
+                ...opp,
+                endsAt: opp.polymarketOutcome.endsAt,
+                totalVolume: (opp.polymarketOutcome.volume || 0) + (opp.kalshiOutcome.volume || 0),
+            }))
+            .sort((a, b) => b.totalVolume - a.totalVolume); // First rank by volume
+
+        // Then take top N and re-sort by profit
+        const top = opportunities
+            .slice(0, this.config.topNOpportunities)
+            .sort((a, b) => b.profit - a.profit);
+
+        return { polymarketOutcomes, kalshiOutcomes, matches, matched, opportunities, top };
+    }
+
     async poll() {
         try {
-            const { polymarketOutcomes, kalshiOutcomes } = await this.fetchMarkets();
-            const matches = matchOutcomes(polymarketOutcomes, kalshiOutcomes, this.config.matchingThreshold);
-            const matched = matches.flatMap((m) => [m.polymarket, m.kalshi]);
-            await this.attachBooks(matched);
-            // Report book coverage: a venue that serves no books can't be priced, and
-            // that reads as "no arbs" forever unless it's visible.
-            const priced = matched.filter((o) => o.yesPrice != null && o.noPrice != null).length;
-            console.log(`[SCAN] ${polymarketOutcomes.length} polymarket / ${kalshiOutcomes.length} kalshi markets `
-                + `-> ${matches.length} matched pairs, books on ${priced}/${matched.length} sides`);
-
-            const allOpportunities = findArbitrageOpportunities(matches, this.config.minProfitCents)
-                .filter((opp) => {
-                    // Skip markets where any side is at or below the threshold: a
-                    // near-zero quote is usually a stale book, not a real offer.
-                    const prices = [
-                        opp.polymarketOutcome.yesPrice, opp.polymarketOutcome.noPrice,
-                        opp.kalshiOutcome.yesPrice, opp.kalshiOutcome.noPrice,
-                    ];
-                    return prices.every((p) => p != null && p > this.config.minPriceThreshold);
-                })
-                .map((opp) => ({
-                    ...opp,
-                    totalVolume: (opp.polymarketOutcome.volume || 0) + (opp.kalshiOutcome.volume || 0),
-                }))
-                .sort((a, b) => b.totalVolume - a.totalVolume); // First rank by volume
-
-            // Then take top N and re-sort by profit
-            const topOpportunities = allOpportunities
-                .slice(0, this.config.topNOpportunities)
-                .sort((a, b) => b.profit - a.profit);
-
+            const { matched, top: topOpportunities } = await this.scanOpportunities();
             const currentPnL = this.calculateCurrentPnL(matched);
             console.log(`[CURRENT PnL: ${currentPnL.toFixed(2)}¢]`);
 

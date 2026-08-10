@@ -16,3 +16,4 @@ venv/
 
 # node
 node_modules/
+paper-state.json

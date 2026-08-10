@@ -65,22 +65,38 @@ function significantTokens(title) {
 /**
  * Greedily pair each Polymarket outcome with its best unused Kalshi outcome.
  *
- * Scanning the whole Synthesis universe means thousands of titles per venue, so
- * a naive N x M Levenshtein sweep is not viable. Two exact prunes (neither can
- * drop a pair that would have cleared `threshold`):
- *  1. An inverted index proposes only pairs sharing a significant word. A pair
- *     with no shared word scores jaccard 0, capping the blend at 0.4; a pair
- *     sharing only stop words lands far below any usable threshold.
- *  2. `jaccard * 0.6 + 0.4` is the best score a pair could reach even with a
- *     perfect edit distance, so anything under `threshold` skips the Levenshtein.
+ * The full Synthesis universe is ~127k Polymarket and ~44k Kalshi markets, so a
+ * naive N x M Levenshtein sweep (5.6 billion pairs) is not viable. Three prunes:
+ *
+ *  1. **An inverted index** proposes only pairs sharing a significant word. A
+ *     pair with no shared word scores jaccard 0, capping the blend at 0.4 — below
+ *     any usable threshold — so this drops nothing reachable.
+ *  2. **Ubiquitous words are not indexed.** Tokens appearing in more than
+ *     `commonTokenFraction` of the venue's titles ("above", "2026", "district")
+ *     carry no signal about *which* event a title names, and indexing them makes
+ *     a single title propose thousands of candidates. A real pair still shares
+ *     something distinctive — a name, a number, a place. This is the one prune
+ *     that could in principle miss a pair whose every shared word is ubiquitous;
+ *     such a pair scores far too low to match anyway.
+ *  3. **A jaccard bound skips the expensive step.** `jaccard * 0.6 + 0.4` is the
+ *     best score a pair could reach even with a perfect edit distance, so
+ *     anything under `threshold` never runs Levenshtein.
  */
-export function matchOutcomes(polymarketOutcomes, kalshiOutcomes, threshold = 0.7) {
+export function matchOutcomes(polymarketOutcomes, kalshiOutcomes, threshold = 0.7, { commonTokenFraction = 0.005 } = {}) {
     const matches = [];
     const usedKalshiIndices = new Set();
 
+    const kalshiTokens = kalshiOutcomes.map((outcome) => significantTokens(outcome.title));
+    const documentFrequency = new Map();
+    for (const tokens of kalshiTokens) {
+        for (const token of tokens) documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+    }
+    const commonCut = Math.max(5, Math.floor(commonTokenFraction * kalshiOutcomes.length));
+
     const index = new Map();
-    kalshiOutcomes.forEach((outcome, i) => {
-        for (const token of significantTokens(outcome.title)) {
+    kalshiTokens.forEach((tokens, i) => {
+        for (const token of tokens) {
+            if (documentFrequency.get(token) > commonCut) continue;
             if (!index.has(token)) index.set(token, []);
             index.get(token).push(i);
         }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { applyBooks, parseOutcomes } from '../src/bot.js';
-import { SynthesisClient, parseOrderbook, unwrap } from '../src/synthesis.js';
+import { SynthesisClient, normalizeBookEntry, parseOrderbook, unwrap } from '../src/synthesis.js';
 
 const market = (overrides = {}) => ({
     condition_id: '0xabc',
@@ -97,6 +97,50 @@ test('batch books are keyed by the token id nested inside orderbook', async (t) 
     const books = await new SynthesisClient().fetchBooks(['tok-yes']);
     assert.deepEqual([...books.keys()], ['tok-yes']);
     assert.deepEqual(books.get('tok-yes').asks, [[0.62, 150]]);
+});
+
+test('kalshi books are keyed by market id and split into yes/no sides', () => {
+    // Kalshi answers one entry per MARKET carrying both sides; its token ids
+    // return nothing from the endpoint at all.
+    const [yes, no] = normalizeBookEntry({
+        venue: 'kalshi',
+        orderbook: {
+            market_id: 'KXPRESNOMD-28-GN',
+            yes: { bids: { '0.16': '68331' }, asks: { '0.17': '1836' } },
+            no: { bids: { '0.83': '1836' }, asks: { '0.84': '68331' } },
+        },
+    });
+    assert.equal(yes[0], 'KXPRESNOMD-28-GN:yes');
+    assert.deepEqual(yes[1].asks, [[0.17, 1836]]);
+    assert.equal(no[0], 'KXPRESNOMD-28-GN:no');
+    assert.deepEqual(no[1].bids, [[0.83, 1836]]);
+});
+
+test('a kalshi market requests its book by market id, polymarket by token', () => {
+    const [kalshi] = parseOutcomes([{ ...market(), market_id: 'KX-1', condition_id: undefined }], 'kalshi');
+    assert.deepEqual(kalshi.bookRequestIds, ['KX-1']);
+    assert.equal(kalshi.yesBookKey, 'KX-1:yes');
+    assert.equal(kalshi.noBookKey, 'KX-1:no');
+
+    const [poly] = parseOutcomes([market()], 'polymarket');
+    assert.deepEqual(poly.bookRequestIds, ['tok-yes', 'tok-no']);
+    assert.equal(poly.yesBookKey, 'tok-yes');
+});
+
+test('a kalshi outcome prices off its split book', () => {
+    const [outcome] = parseOutcomes([{ ...market(), market_id: 'KX-1', condition_id: undefined }], 'kalshi');
+    const books = new Map(normalizeBookEntry({
+        orderbook: {
+            market_id: 'KX-1',
+            yes: { bids: { '0.60': '80' }, asks: { '0.62': '150' } },
+            no: { bids: { '0.38': '150' }, asks: { '0.40': '80' } },
+        },
+    }));
+    applyBooks([outcome], books);
+    assert.equal(outcome.yesPrice, 62);
+    assert.equal(outcome.noPrice, 40);
+    assert.equal(outcome.yesSize, 150);
+    assert.equal(outcome.yesBid, 60);
 });
 
 test('envelopes are peeled the way the python client peels them', () => {

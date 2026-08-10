@@ -57,6 +57,8 @@ function buildLeg(outcome, side) {
         title: outcome.title,
         side,
         tokenId: side === 'YES' ? outcome.yesId : outcome.noId,
+        bookKey: side === 'YES' ? outcome.yesBookKey : outcome.noBookKey,
+        bookRequestId: side === 'YES' ? outcome.yesBookRequestId : outcome.noBookRequestId,
         price,
         size: (side === 'YES' ? outcome.yesSize : outcome.noSize) || 0,
         fee: feePerShareCents(outcome.platform, price),
