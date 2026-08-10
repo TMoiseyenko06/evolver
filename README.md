@@ -9,6 +9,10 @@ is forward-tested on live markets with paper money, ranked, and bred forever.
   lives in the sibling [`polybot/`](polybot/) package and is imported, not
   reimplemented. See the README's *"Where is polybot?"* section for why it's
   vendored here.
+- **Arbitrage**, a different edge from directional trading: [`arb/`](arb/) is the
+  read-only scanner (`python -m arb intra|field|cross|match|paper`), and
+  [`arbjs/`](arbjs/) is a Node bot that actually places the cross-venue legs.
+  Both trade through [synthesis.trade](https://synthesis.trade).
 
 ```bash
 cp .env.example .env           # then set OPENROUTER_API_KEY (auto-loaded by the CLI)

@@ -1,0 +1,14 @@
+{
+  "name": "arbjs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-venue prediction-market arbitrage bot (Polymarket + Kalshi via synthesis.trade)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/**/*.test.js\""
+  }
+}
